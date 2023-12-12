@@ -1,3 +1,7 @@
+# Want to compile from scratch on every machine
+bin/
+share/
+
 # Tools
 /.direnv/
 /venv/
