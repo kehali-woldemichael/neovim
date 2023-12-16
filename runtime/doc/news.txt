@@ -252,6 +252,9 @@ The following new APIs and features were added.
 • |vim.text.hexencode()| and |vim.text.hexdecode()| convert strings to and
   from byte representations.
 
+• 'completeopt' option supports "popup" flags to show extra information in
+  in floating window.
+
 ==============================================================================
 CHANGED FEATURES                                                 *news-changed*
 
@@ -345,6 +348,9 @@ The following changes to existing APIs or features add new behavior.
   Use |vim.diagnostic.config()| instead.
 
 • Added "force_crlf" option field in |nvim_open_term()|.
+
+• Attempting to set an invalid keycode option (e.g. `set t_foo=123`) no longer
+  gives an error.
 
 ==============================================================================
 REMOVED FEATURES                                                 *news-removed*
