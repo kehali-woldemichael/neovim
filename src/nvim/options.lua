@@ -2,6 +2,7 @@
 --- @field full_name string
 --- @field desc? string
 --- @field abbreviation? string
+--- @field alias? string|string[]
 --- @field short_desc? string|fun(): string
 --- @field varname? string
 --- @field pv_name? string
@@ -84,6 +85,7 @@ end
 return {
   cstr = cstr,
   --- @type vim.option_meta[]
+  --- The order of the options MUST be alphabetic for ":set all".
   options = {
     {
       abbreviation = 'al',
@@ -316,7 +318,7 @@ return {
         See |:hi-normal| if you want to set the background color explicitly.
         					*g:colors_name*
         When a color scheme is loaded (the "g:colors_name" variable is set)
-        setting 'background' will cause the color scheme to be reloaded.  If
+        changing 'background' will cause the color scheme to be reloaded.  If
         the color scheme adjusts to the value of 'background' this will work.
         However, if the color scheme sets 'background' itself the effect may
         be undone.  First delete the "g:colors_name" variable when needed.
@@ -326,13 +328,9 @@ return {
         	:if $TERM ==# "xterm"
         	:  set background=dark
         	:endif
-        <	When this option is set, the default settings for the highlight groups
+        <	When this option is changed, the default settings for the highlight groups
         will change.  To use other settings, place ":highlight" commands AFTER
         the setting of the 'background' option.
-        This option is also used in the "$VIMRUNTIME/syntax/syntax.vim" file
-        to select the colors for syntax highlighting.  After changing this
-        option, you must load syntax.vim again to see the result.  This can be
-        done with ":syntax on".
       ]=],
       expand_cb = 'expand_set_background',
       full_name = 'background',
@@ -3350,9 +3348,9 @@ return {
         	:s///g		  subst. one	  subst. all
         	:s///gg		  subst. all	  subst. one
 
-        DEPRECATED: Setting this option may break plugins that are not aware
-        of this option.  Also, many users get confused that adding the /g flag
-        has the opposite effect of that it normally does.
+        NOTE: Setting this option may break plugins that rely on the default
+        behavior of the 'g' flag. This will also make the 'g' flag have the
+        opposite effect of that documented in |:s_g|.
       ]=],
       full_name = 'gdefault',
       scope = { 'global' },
@@ -6813,6 +6811,7 @@ return {
     },
     {
       abbreviation = 'sd',
+      alias = { 'vi', 'viminfo' },
       cb = 'did_set_shada',
       defaults = {
         if_true = "!,'100,<50,s10,h",
@@ -6944,6 +6943,7 @@ return {
     },
     {
       abbreviation = 'sdf',
+      alias = { 'vif', 'viminfofile' },
       defaults = { if_true = '' },
       deny_duplicates = true,
       desc = [=[
@@ -9377,22 +9377,6 @@ return {
       short_desc = N_('specifies what to save for :mkview'),
       type = 'string',
       varname = 'p_vop',
-    },
-    {
-      abbreviation = 'vi',
-      full_name = 'viminfo',
-      nodefault = true,
-      scope = { 'global' },
-      short_desc = N_('Alias for shada'),
-      type = 'string',
-    },
-    {
-      abbreviation = 'vif',
-      full_name = 'viminfofile',
-      nodefault = true,
-      scope = { 'global' },
-      short_desc = N_('Alias for shadafile instead'),
-      type = 'string',
     },
     {
       abbreviation = 've',
