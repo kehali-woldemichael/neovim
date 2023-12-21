@@ -7,8 +7,8 @@
 #endif
 
 #include "nvim/autocmd.h"
+#include "nvim/buffer_defs.h"
 #include "nvim/eval.h"
-#include "nvim/event/defs.h"
 #include "nvim/event/signal.h"
 #include "nvim/globals.h"
 #include "nvim/log.h"

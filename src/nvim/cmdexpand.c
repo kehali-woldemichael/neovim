@@ -6,9 +6,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/types.h>
+#include <uv.h>
 
-#include "nvim/api/private/defs.h"
 #include "nvim/api/private/helpers.h"
 #include "nvim/arglist.h"
 #include "nvim/ascii_defs.h"
@@ -841,7 +840,7 @@ static char *find_longest_match(expand_T *xp, int options)
 char *ExpandOne(expand_T *xp, char *str, char *orig, int options, int mode)
 {
   char *ss = NULL;
-  int orig_saved = false;
+  bool orig_saved = false;
 
   // first handle the case of using an old match
   if (mode == WILD_NEXT || mode == WILD_PREV
@@ -3311,7 +3310,7 @@ static int wildmenu_process_key_menunames(CmdlineInfo *cclp, int key, expand_T *
   } else if (key == K_UP) {
     // Hitting <Up>: Remove one submenu name in front of the
     // cursor
-    int found = false;
+    bool found = false;
 
     int j = (int)(xp->xp_pattern - cclp->cmdbuff);
     int i = 0;
@@ -3367,7 +3366,7 @@ static int wildmenu_process_key_filenames(CmdlineInfo *cclp, int key, expand_T *
     KeyTyped = true;  // in case the key was mapped
   } else if (strncmp(xp->xp_pattern, upseg + 1, 3) == 0 && key == K_DOWN) {
     // If in a direct ancestor, strip off one ../ to go down
-    int found = false;
+    bool found = false;
 
     int j = cclp->cmdpos;
     int i = (int)(xp->xp_pattern - cclp->cmdbuff);
@@ -3388,7 +3387,7 @@ static int wildmenu_process_key_filenames(CmdlineInfo *cclp, int key, expand_T *
     }
   } else if (key == K_UP) {
     // go up a directory
-    int found = false;
+    bool found = false;
 
     int j = cclp->cmdpos - 1;
     int i = (int)(xp->xp_pattern - cclp->cmdbuff);

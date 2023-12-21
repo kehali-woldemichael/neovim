@@ -6,13 +6,11 @@
 #include <stdbool.h>
 #include <string.h>
 
-#include "nvim/api/private/defs.h"
 #include "nvim/api/private/helpers.h"
 #include "nvim/api/vim.h"
 #include "nvim/ascii_defs.h"
 #include "nvim/autocmd.h"
 #include "nvim/buffer.h"
-#include "nvim/buffer_defs.h"
 #include "nvim/charset.h"
 #include "nvim/drawscreen.h"
 #include "nvim/eval/typval.h"
@@ -38,6 +36,7 @@
 #include "nvim/pos_defs.h"
 #include "nvim/state_defs.h"
 #include "nvim/strings.h"
+#include "nvim/types_defs.h"
 #include "nvim/ui.h"
 #include "nvim/ui_compositor.h"
 #include "nvim/vim_defs.h"
@@ -810,7 +809,7 @@ win_T *pum_set_info(int pum_idx, char *info)
 /// menu must be recomputed.
 static bool pum_set_selected(int n, int repeat)
 {
-  int resized = false;
+  bool resized = false;
   int context = pum_height / 2;
   int prev_selected = pum_selected;
 

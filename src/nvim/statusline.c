@@ -6,11 +6,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "nvim/api/private/defs.h"
 #include "nvim/api/private/helpers.h"
 #include "nvim/ascii_defs.h"
 #include "nvim/buffer.h"
-#include "nvim/buffer_defs.h"
 #include "nvim/charset.h"
 #include "nvim/digraph.h"
 #include "nvim/drawline.h"
@@ -40,6 +38,7 @@
 #include "nvim/state_defs.h"
 #include "nvim/statusline.h"
 #include "nvim/strings.h"
+#include "nvim/types_defs.h"
 #include "nvim/ui.h"
 #include "nvim/undo.h"
 #include "nvim/window.h"
@@ -696,7 +695,7 @@ void draw_tabline(void)
   win_T *wp;
   int attr_nosel = HL_ATTR(HLF_TP);
   int attr_fill = HL_ATTR(HLF_TPF);
-  int use_sep_chars = (t_colors < 8);
+  bool use_sep_chars = (t_colors < 8);
 
   if (default_grid.chars == NULL) {
     return;
@@ -772,7 +771,7 @@ void draw_tabline(void)
 
       grid_line_put_schar(col++, schar_from_ascii(' '), attr);
 
-      int modified = false;
+      bool modified = false;
 
       for (wincount = 0; wp != NULL; wp = wp->w_next, wincount++) {
         if (bufIsChanged(wp->w_buffer)) {
@@ -959,8 +958,8 @@ int build_stl_str_hl(win_T *wp, char *out, size_t outlen, char *fmt, OptIndex op
 
   // If "fmt" was set insecurely it needs to be evaluated in the sandbox.
   // "opt_idx" will be kOptInvalid when caller is nvim_eval_statusline().
-  const int use_sandbox = (opt_idx != kOptInvalid) ? was_set_insecurely(wp, opt_idx, opt_scope)
-                                                   : false;
+  const bool use_sandbox = (opt_idx != kOptInvalid) ? was_set_insecurely(wp, opt_idx, opt_scope)
+                                                    : false;
 
   // When the format starts with "%!" then evaluate it as an expression and
   // use the result as the actual format string.
@@ -1178,7 +1177,7 @@ int build_stl_str_hl(win_T *wp, char *out, size_t outlen, char *fmt, OptIndex op
         out_p = out_p - n + 1;
         // Fill up space left over by half a double-wide char.
         while (++group_len < stl_items[stl_groupitems[groupdepth]].minwid) {
-          MB_CHAR2BYTES(fillchar, out_p);
+          out_p += utf_char2bytes(fillchar, out_p);
         }
         // }
 
@@ -1201,7 +1200,7 @@ int build_stl_str_hl(win_T *wp, char *out, size_t outlen, char *fmt, OptIndex op
         if (min_group_width < 0) {
           min_group_width = 0 - min_group_width;
           while (group_len++ < min_group_width && out_p < out_end_p) {
-            MB_CHAR2BYTES(fillchar, out_p);
+            out_p += utf_char2bytes(fillchar, out_p);
           }
           // If the group is right-aligned, shift everything to the right and
           // prepend with filler characters.
@@ -1222,7 +1221,7 @@ int build_stl_str_hl(win_T *wp, char *out, size_t outlen, char *fmt, OptIndex op
 
           // Prepend the fill characters
           for (; group_len > 0; group_len--) {
-            MB_CHAR2BYTES(fillchar, t);
+            t += utf_char2bytes(fillchar, t);
           }
         }
       }
@@ -1803,7 +1802,7 @@ int build_stl_str_hl(win_T *wp, char *out, size_t outlen, char *fmt, OptIndex op
           if (l + 1 == minwid && fillchar == '-' && ascii_isdigit(*t)) {
             *out_p++ = ' ';
           } else {
-            MB_CHAR2BYTES(fillchar, out_p);
+            out_p += utf_char2bytes(fillchar, out_p);
           }
         }
         minwid = 0;
@@ -1826,7 +1825,7 @@ int build_stl_str_hl(win_T *wp, char *out, size_t outlen, char *fmt, OptIndex op
         // digit follows.
         if (fillable && *t == ' '
             && (!ascii_isdigit(*(t + 1)) || fillchar != '-')) {
-          MB_CHAR2BYTES(fillchar, out_p);
+          out_p += utf_char2bytes(fillchar, out_p);
         } else {
           *out_p++ = *t;
         }
@@ -1843,7 +1842,7 @@ int build_stl_str_hl(win_T *wp, char *out, size_t outlen, char *fmt, OptIndex op
 
       // For left-aligned items, fill any remaining space with the fillchar
       for (; l < minwid && out_p < out_end_p; l++) {
-        MB_CHAR2BYTES(fillchar, out_p);
+        out_p += utf_char2bytes(fillchar, out_p);
       }
 
       // Otherwise if the item is a number, copy that to the output buffer.
@@ -2064,7 +2063,7 @@ int build_stl_str_hl(win_T *wp, char *out, size_t outlen, char *fmt, OptIndex op
 
       // Fill up for half a double-wide character.
       while (++width < maxwidth) {
-        MB_CHAR2BYTES(fillchar, trunc_p);
+        trunc_p += utf_char2bytes(fillchar, trunc_p);
         *trunc_p = NUL;
       }
     }
@@ -2099,7 +2098,7 @@ int build_stl_str_hl(win_T *wp, char *out, size_t outlen, char *fmt, OptIndex op
         char *seploc = start + dislocation;
         STRMOVE(seploc, start);
         for (char *s = start; s < seploc;) {
-          MB_CHAR2BYTES(fillchar, s);
+          s += utf_char2bytes(fillchar, s);
         }
 
         for (int item_idx = stl_separator_locations[l] + 1;

@@ -55,3 +55,10 @@ typedef struct {
   int add;  // Number of signs added in the invalid range, negative for deleted signs.
 } SignRange;
 #define SIGNRANGE_INIT { 0, 0 }
+
+typedef struct file_buffer buf_T;
+typedef struct loop Loop;
+typedef struct regprog regprog_T;
+typedef struct syn_state synstate_T;
+typedef struct terminal Terminal;
+typedef struct window_S win_T;

@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/types.h>
+#include <uv.h>
 
 #include "nvim/ascii_defs.h"
 #include "nvim/charset.h"
@@ -1058,7 +1058,8 @@ char *vim_strsave_escape_ks(char *p)
 /// vim_strsave_escape_ks().  Works in-place.
 void vim_unescape_ks(char *p)
 {
-  uint8_t *s = (uint8_t *)p, *d = (uint8_t *)p;
+  uint8_t *s = (uint8_t *)p;
+  uint8_t *d = (uint8_t *)p;
 
   while (*s != NUL) {
     if (s[0] == K_SPECIAL && s[1] == KS_SPECIAL && s[2] == KE_FILLER) {

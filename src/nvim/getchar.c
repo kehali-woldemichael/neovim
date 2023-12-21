@@ -11,7 +11,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "nvim/api/private/defs.h"
 #include "nvim/api/private/helpers.h"
 #include "nvim/ascii_defs.h"
 #include "nvim/buffer_defs.h"
@@ -22,6 +21,7 @@
 #include "nvim/eval.h"
 #include "nvim/eval/typval.h"
 #include "nvim/eval/typval_defs.h"
+#include "nvim/event/loop.h"
 #include "nvim/event/multiqueue.h"
 #include "nvim/ex_cmds.h"
 #include "nvim/ex_docmd.h"
@@ -34,7 +34,6 @@
 #include "nvim/insexpand.h"
 #include "nvim/keycodes.h"
 #include "nvim/lua/executor.h"
-#include "nvim/macros_defs.h"
 #include "nvim/main.h"
 #include "nvim/mapping.h"
 #include "nvim/mbyte.h"
@@ -91,7 +90,7 @@ static int typeahead_char = 0;  ///< typeahead char that's not flushed
 
 /// When block_redo is true the redo buffer will not be changed.
 /// Used by edit() to repeat insertions.
-static int block_redo = false;
+static bool block_redo = false;
 
 static int KeyNoremap = 0;  ///< remapping flags
 
@@ -375,16 +374,16 @@ static void start_stuff(void)
   }
 }
 
-/// Return true if the stuff buffer is empty.
-int stuff_empty(void)
+/// @return  true if the stuff buffer is empty.
+bool stuff_empty(void)
   FUNC_ATTR_PURE
 {
   return (readbuf1.bh_first.b_next == NULL && readbuf2.bh_first.b_next == NULL);
 }
 
-/// Return true if readbuf1 is empty.  There may still be redo characters in
-/// redbuf2.
-int readbuf1_empty(void)
+/// @return  true if readbuf1 is empty.  There may still be redo characters in
+///          redbuf2.
+bool readbuf1_empty(void)
   FUNC_ATTR_PURE
 {
   return (readbuf1.bh_first.b_next == NULL);

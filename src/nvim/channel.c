@@ -7,7 +7,6 @@
 
 #include "klib/kvec.h"
 #include "nvim/api/private/converter.h"
-#include "nvim/api/private/defs.h"
 #include "nvim/api/private/helpers.h"
 #include "nvim/autocmd.h"
 #include "nvim/buffer_defs.h"
@@ -15,6 +14,7 @@
 #include "nvim/eval.h"
 #include "nvim/eval/encode.h"
 #include "nvim/eval/typval.h"
+#include "nvim/event/loop.h"
 #include "nvim/event/multiqueue.h"
 #include "nvim/event/rstream.h"
 #include "nvim/event/socket.h"
@@ -30,10 +30,12 @@
 #include "nvim/message.h"
 #include "nvim/msgpack_rpc/channel.h"
 #include "nvim/msgpack_rpc/server.h"
+#include "nvim/os/fs.h"
 #include "nvim/os/os_defs.h"
 #include "nvim/os/shell.h"
 #include "nvim/path.h"
 #include "nvim/rbuffer.h"
+#include "nvim/terminal.h"
 #include "nvim/types_defs.h"
 
 #ifdef MSWIN
@@ -573,7 +575,10 @@ size_t channel_send(uint64_t id, char *data, size_t len, bool data_owned, const 
       goto retfree;
     }
     // unbuffered write
-    written = len * fwrite(data, len, 1, stderr);
+    ptrdiff_t wres = os_write(STDERR_FILENO, data, len, false);
+    if (wres >= 0) {
+      written = (size_t)wres;
+    }
     goto retfree;
   }
 

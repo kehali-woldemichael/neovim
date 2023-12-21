@@ -18,7 +18,6 @@
 #include "nvim/globals.h"
 #include "nvim/indent.h"
 #include "nvim/indent_c.h"
-#include "nvim/macros_defs.h"
 #include "nvim/mark.h"
 #include "nvim/mbyte.h"
 #include "nvim/memline.h"
@@ -870,7 +869,7 @@ void op_formatexpr(oparg_T *oap)
 /// @param c  character to be inserted
 int fex_format(linenr_T lnum, long count, int c)
 {
-  int use_sandbox = was_set_insecurely(curwin, kOptFormatexpr, OPT_LOCAL);
+  bool use_sandbox = was_set_insecurely(curwin, kOptFormatexpr, OPT_LOCAL);
   const sctx_T save_sctx = current_sctx;
 
   // Set v:lnum to the first line number and v:count to the number of lines.

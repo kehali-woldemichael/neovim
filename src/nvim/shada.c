@@ -13,7 +13,6 @@
 #include <uv.h>
 
 #include "auto/config.h"
-#include "nvim/api/private/defs.h"
 #include "nvim/api/private/helpers.h"
 #include "nvim/ascii_defs.h"
 #include "nvim/buffer.h"
@@ -50,6 +49,7 @@
 #include "nvim/search.h"
 #include "nvim/shada.h"
 #include "nvim/strings.h"
+#include "nvim/types_defs.h"
 #include "nvim/version.h"
 #include "nvim/vim_defs.h"
 

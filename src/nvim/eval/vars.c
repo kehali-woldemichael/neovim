@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/types.h>
+#include <uv.h>
 
 #include "nvim/ascii_defs.h"
 #include "nvim/autocmd.h"
@@ -616,7 +616,7 @@ static void list_tab_vars(int *first)
 /// List variables in "arg".
 static const char *list_arg_vars(exarg_T *eap, const char *arg, int *first)
 {
-  int error = false;
+  bool error = false;
   int len;
   const char *name;
   const char *name_start;

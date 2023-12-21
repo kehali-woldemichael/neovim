@@ -8,7 +8,7 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/types.h>
+#include <uv.h>
 
 #include "auto/config.h"
 #include "klib/kvec.h"
@@ -27,6 +27,7 @@
 #include "nvim/path.h"
 #include "nvim/pos_defs.h"
 #include "nvim/strings.h"
+#include "nvim/types_defs.h"
 #include "nvim/vim_defs.h"
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS

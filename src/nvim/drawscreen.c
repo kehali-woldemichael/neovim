@@ -928,7 +928,6 @@ int showmode(void)
 
   bool can_show_mode = (p_ch != 0 || ui_has(kUIMessages));
   if ((do_mode || reg_recording != 0) && can_show_mode) {
-    int sub_attr;
     if (skip_showmode()) {
       return 0;  // show mode later
     }
@@ -981,7 +980,8 @@ int showmode(void)
           }
           if (edit_submode_extra != NULL) {
             msg_puts_attr(" ", attr);  // Add a space in between.
-            if ((int)edit_submode_highl < HLF_COUNT) {
+            int sub_attr;
+            if (edit_submode_highl < HLF_COUNT) {
               sub_attr = win_hl_attr(curwin, (int)edit_submode_highl);
             } else {
               sub_attr = attr;
@@ -1212,7 +1212,7 @@ static bool win_redraw_signcols(win_T *wp)
   } else if (wp->w_maxscwidth <= 1 && buf->b_signs_with_text >= (size_t)wp->w_maxscwidth) {
     width = wp->w_maxscwidth;
   } else {
-    width = buf_signcols_validate(wp, buf, false);
+    width = MIN(wp->w_maxscwidth, buf_signcols_validate(wp, buf, false));
   }
 
   int scwidth = wp->w_scwidth;
