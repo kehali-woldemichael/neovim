@@ -5,9 +5,7 @@
 
 #include "nvim/eval/typval_defs.h"
 #include "nvim/ex_eval_defs.h"
-#include "nvim/normal_defs.h"
 #include "nvim/os/time_defs.h"
-#include "nvim/pos_defs.h"
 #include "nvim/regexp_defs.h"
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
@@ -128,7 +126,7 @@ struct aucmd_executable_t {
 typedef char *(*LineGetter)(int, void *, int, bool);
 
 /// Structure for command definition.
-typedef struct cmdname {
+typedef struct {
   char *cmd_name;                      ///< Name of the command.
   ex_func_T cmd_func;                  ///< Function with implementation of this command.
   ex_preview_func_T cmd_preview_func;  ///< Preview callback function of this command.

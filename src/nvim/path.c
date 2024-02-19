@@ -17,20 +17,24 @@
 #include "nvim/file_search.h"
 #include "nvim/fileio.h"
 #include "nvim/garray.h"
-#include "nvim/gettext.h"
+#include "nvim/gettext_defs.h"
 #include "nvim/globals.h"
 #include "nvim/macros_defs.h"
 #include "nvim/mbyte.h"
 #include "nvim/memory.h"
 #include "nvim/message.h"
 #include "nvim/option.h"
+#include "nvim/option_defs.h"
 #include "nvim/option_vars.h"
 #include "nvim/os/fs.h"
+#include "nvim/os/fs_defs.h"
 #include "nvim/os/input.h"
 #include "nvim/os/os.h"
+#include "nvim/os/os_defs.h"
 #include "nvim/os/shell.h"
 #include "nvim/path.h"
 #include "nvim/regexp.h"
+#include "nvim/regexp_defs.h"
 #include "nvim/strings.h"
 #include "nvim/vim_defs.h"
 #include "nvim/window.h"
@@ -651,7 +655,7 @@ static size_t do_path_expand(garray_T *gap, const char *path, size_t wildoff, in
                && (vim_strchr("*?[{~$", (uint8_t)(*path_end)) != NULL
                    || (!p_fic && (flags & EW_ICASE) && mb_isalpha(utf_ptr2char(path_end))))
 #endif
-               ) {  // NOLINT(whitespace/parens)
+               ) {
       e = p;
     }
     len = (size_t)(utfc_ptr2len(path_end));
@@ -717,7 +721,7 @@ static size_t do_path_expand(garray_T *gap, const char *path, size_t wildoff, in
       && *path_end == '/') {
     STRCPY(s, path_end + 1);
     stardepth++;
-    (void)do_path_expand(gap, buf, (size_t)(s - buf), flags, true);
+    do_path_expand(gap, buf, (size_t)(s - buf), flags, true);
     stardepth--;
   }
   *s = NUL;
@@ -746,7 +750,7 @@ static size_t do_path_expand(garray_T *gap, const char *path, size_t wildoff, in
           STRCPY(buf + len, "/**");  // NOLINT
           STRCPY(buf + len + 3, path_end);
           stardepth++;
-          (void)do_path_expand(gap, buf, len + 1, flags, true);
+          do_path_expand(gap, buf, len + 1, flags, true);
           stardepth--;
         }
 
@@ -754,7 +758,7 @@ static size_t do_path_expand(garray_T *gap, const char *path, size_t wildoff, in
         if (path_has_exp_wildcard(path_end)) {      // handle more wildcards
           // need to expand another component of the path
           // remove backslashes for the remaining components only
-          (void)do_path_expand(gap, buf, len + 1, flags, false);
+          do_path_expand(gap, buf, len + 1, flags, false);
         } else {
           FileInfo file_info;
 
@@ -907,7 +911,7 @@ static char *get_path_cutoff(char *fname, garray_T *gap)
 #ifdef MSWIN
             || (vim_ispathsep(fname[j]) && vim_ispathsep(path_part[i][j]))
 #endif
-            )  // NOLINT(whitespace/parens)
+            )
            && fname[j] != NUL && path_part[i][j] != NUL) {
       j++;
     }
@@ -1965,7 +1969,7 @@ bool same_directory(char *f1, char *f2)
     return false;
   }
 
-  (void)vim_FullName(f1, ffname, MAXPATHL, false);
+  vim_FullName(f1, ffname, MAXPATHL, false);
   t1 = path_tail_with_sep(ffname);
   t2 = path_tail_with_sep(f2);
   return t1 - ffname == t2 - f2

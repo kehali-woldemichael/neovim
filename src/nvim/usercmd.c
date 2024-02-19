@@ -16,9 +16,10 @@
 #include "nvim/eval.h"
 #include "nvim/ex_docmd.h"
 #include "nvim/garray.h"
-#include "nvim/gettext.h"
+#include "nvim/gettext_defs.h"
 #include "nvim/globals.h"
 #include "nvim/highlight.h"
+#include "nvim/highlight_defs.h"
 #include "nvim/keycodes.h"
 #include "nvim/lua/executor.h"
 #include "nvim/macros_defs.h"
@@ -75,6 +76,7 @@ static const char *command_complete[] = {
   [EXPAND_HELP] = "help",
   [EXPAND_HIGHLIGHT] = "highlight",
   [EXPAND_HISTORY] = "history",
+  [EXPAND_KEYMAP] = "keymap",
 #ifdef HAVE_WORKING_LIBINTL
   [EXPAND_LOCALES] = "locale",
 #endif
@@ -582,7 +584,7 @@ static void uc_list(char *name, size_t name_len)
       msg_outtrans(IObuff, 0);
 
       if (cmd->uc_luaref != LUA_NOREF) {
-        char *fn = nlua_funcref_str(cmd->uc_luaref);
+        char *fn = nlua_funcref_str(cmd->uc_luaref, NULL);
         msg_puts_attr(fn, HL_ATTR(HLF_8));
         xfree(fn);
         // put the description on a new line
@@ -872,7 +874,7 @@ int uc_add_command(char *name, size_t name_len, const char *rep, uint32_t argt, 
   char *rep_buf = NULL;
   garray_T *gap;
 
-  replace_termcodes(rep, strlen(rep), &rep_buf, 0, 0, NULL, CPO_TO_CPO_FLAGS);
+  replace_termcodes(rep, strlen(rep), &rep_buf, 0, 0, NULL, p_cpo);
   if (rep_buf == NULL) {
     // Can't replace termcodes - try using the string as is
     rep_buf = xstrdup(rep);
@@ -1132,6 +1134,20 @@ bool uc_split_args_iter(const char *arg, size_t arglen, size_t *end, char *buf, 
 
   *len = l;
   return true;
+}
+
+size_t uc_nargs_upper_bound(const char *arg, size_t arglen)
+{
+  bool was_white = true;  // space before first arg
+  size_t nargs = 0;
+  for (size_t i = 0; i < arglen; i++) {
+    bool is_white = ascii_iswhite(arg[i]);
+    if (was_white && !is_white) {
+      nargs++;
+    }
+    was_white = is_white;
+  }
+  return nargs;
 }
 
 /// split and quote args for <f-args>
@@ -1708,8 +1724,8 @@ int do_ucmd(exarg_T *eap, bool preview)
     save_current_sctx = current_sctx;
     current_sctx.sc_sid = cmd->uc_script_ctx.sc_sid;
   }
-  (void)do_cmdline(buf, eap->getline, eap->cookie,
-                   DOCMD_VERBOSE|DOCMD_NOWAIT|DOCMD_KEYTYPED);
+  do_cmdline(buf, eap->getline, eap->cookie,
+             DOCMD_VERBOSE|DOCMD_NOWAIT|DOCMD_KEYTYPED);
 
   // Careful: Do not use "cmd" here, it may have become invalid if a user
   // command was added.

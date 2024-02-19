@@ -6,20 +6,22 @@
 #include "nvim/api/deprecated.h"
 #include "nvim/api/extmark.h"
 #include "nvim/api/keysets_defs.h"
-#include "nvim/api/options.h"
 #include "nvim/api/private/defs.h"
 #include "nvim/api/private/helpers.h"
 #include "nvim/api/private/validate.h"
 #include "nvim/api/vimscript.h"
 #include "nvim/buffer_defs.h"
 #include "nvim/decoration.h"
+#include "nvim/decoration_defs.h"
 #include "nvim/extmark.h"
 #include "nvim/globals.h"
 #include "nvim/highlight.h"
 #include "nvim/highlight_group.h"
 #include "nvim/lua/executor.h"
 #include "nvim/memory.h"
+#include "nvim/memory_defs.h"
 #include "nvim/option.h"
+#include "nvim/option_defs.h"
 #include "nvim/pos_defs.h"
 #include "nvim/types_defs.h"
 
@@ -49,12 +51,12 @@ String nvim_command_output(uint64_t channel_id, String command, Error *err)
 
 /// @deprecated Use nvim_exec_lua() instead.
 /// @see nvim_exec_lua
-Object nvim_execute_lua(String code, Array args, Error *err)
+Object nvim_execute_lua(String code, Array args, Arena *arena, Error *err)
   FUNC_API_SINCE(3)
   FUNC_API_DEPRECATED_SINCE(7)
   FUNC_API_REMOTE_ONLY
 {
-  return nlua_exec(code, args, err);
+  return nlua_exec(code, args, kRetObject, arena, err);
 }
 
 /// Gets the buffer number
@@ -243,19 +245,17 @@ void buffer_insert(Buffer buffer, Integer lnum, ArrayOf(String) lines, Error *er
 /// @param index    Line index
 /// @param[out] err Error details, if any
 /// @return Line string
-String buffer_get_line(Buffer buffer, Integer index, Error *err)
+String buffer_get_line(Buffer buffer, Integer index, Arena *arena, Error *err)
   FUNC_API_DEPRECATED_SINCE(1)
 {
   String rv = { .size = 0 };
 
   index = convert_index(index);
-  Array slice = nvim_buf_get_lines(0, buffer, index, index + 1, true, NULL, err);
+  Array slice = nvim_buf_get_lines(0, buffer, index, index + 1, true, arena, NULL, err);
 
   if (!ERROR_SET(err) && slice.size) {
     rv = slice.items[0].data.string;
   }
-
-  xfree(slice.items);
 
   return rv;
 }
@@ -317,12 +317,13 @@ ArrayOf(String) buffer_get_line_slice(Buffer buffer,
                                       Integer end,
                                       Boolean include_start,
                                       Boolean include_end,
+                                      Arena *arena,
                                       Error *err)
   FUNC_API_DEPRECATED_SINCE(1)
 {
   start = convert_index(start) + !include_start;
   end = convert_index(end) + include_end;
-  return nvim_buf_get_lines(0, buffer, start, end, false, NULL, err);
+  return nvim_buf_get_lines(0, buffer, start, end, false, arena, NULL, err);
 }
 
 /// Replaces a line range on the buffer
@@ -361,7 +362,7 @@ void buffer_set_line_slice(Buffer buffer, Integer start, Integer end, Boolean in
 ///
 ///         @warning It may return nil if there was no previous value
 ///                  or if previous value was `v:null`.
-Object buffer_set_var(Buffer buffer, String name, Object value, Error *err)
+Object buffer_set_var(Buffer buffer, String name, Object value, Arena *arena, Error *err)
   FUNC_API_DEPRECATED_SINCE(1)
 {
   buf_T *buf = find_buffer_by_handle(buffer, err);
@@ -370,7 +371,7 @@ Object buffer_set_var(Buffer buffer, String name, Object value, Error *err)
     return NIL;
   }
 
-  return dict_set_var(buf->b_vars, name, value, false, true, err);
+  return dict_set_var(buf->b_vars, name, value, false, true, arena, err);
 }
 
 /// Removes a buffer-scoped (b:) variable
@@ -381,7 +382,7 @@ Object buffer_set_var(Buffer buffer, String name, Object value, Error *err)
 /// @param name       Variable name
 /// @param[out] err   Error details, if any
 /// @return Old value
-Object buffer_del_var(Buffer buffer, String name, Error *err)
+Object buffer_del_var(Buffer buffer, String name, Arena *arena, Error *err)
   FUNC_API_DEPRECATED_SINCE(1)
 {
   buf_T *buf = find_buffer_by_handle(buffer, err);
@@ -390,7 +391,7 @@ Object buffer_del_var(Buffer buffer, String name, Error *err)
     return NIL;
   }
 
-  return dict_set_var(buf->b_vars, name, NIL, true, true, err);
+  return dict_set_var(buf->b_vars, name, NIL, true, true, arena, err);
 }
 
 /// Sets a window-scoped (w:) variable
@@ -405,7 +406,7 @@ Object buffer_del_var(Buffer buffer, String name, Error *err)
 ///
 ///         @warning It may return nil if there was no previous value
 ///                  or if previous value was `v:null`.
-Object window_set_var(Window window, String name, Object value, Error *err)
+Object window_set_var(Window window, String name, Object value, Arena *arena, Error *err)
   FUNC_API_DEPRECATED_SINCE(1)
 {
   win_T *win = find_window_by_handle(window, err);
@@ -414,7 +415,7 @@ Object window_set_var(Window window, String name, Object value, Error *err)
     return NIL;
   }
 
-  return dict_set_var(win->w_vars, name, value, false, true, err);
+  return dict_set_var(win->w_vars, name, value, false, true, arena, err);
 }
 
 /// Removes a window-scoped (w:) variable
@@ -425,7 +426,7 @@ Object window_set_var(Window window, String name, Object value, Error *err)
 /// @param name     variable name
 /// @param[out] err Error details, if any
 /// @return Old value
-Object window_del_var(Window window, String name, Error *err)
+Object window_del_var(Window window, String name, Arena *arena, Error *err)
   FUNC_API_DEPRECATED_SINCE(1)
 {
   win_T *win = find_window_by_handle(window, err);
@@ -434,7 +435,7 @@ Object window_del_var(Window window, String name, Error *err)
     return NIL;
   }
 
-  return dict_set_var(win->w_vars, name, NIL, true, true, err);
+  return dict_set_var(win->w_vars, name, NIL, true, true, arena, err);
 }
 
 /// Sets a tab-scoped (t:) variable
@@ -449,7 +450,7 @@ Object window_del_var(Window window, String name, Error *err)
 ///
 ///         @warning It may return nil if there was no previous value
 ///                  or if previous value was `v:null`.
-Object tabpage_set_var(Tabpage tabpage, String name, Object value, Error *err)
+Object tabpage_set_var(Tabpage tabpage, String name, Object value, Arena *arena, Error *err)
   FUNC_API_DEPRECATED_SINCE(1)
 {
   tabpage_T *tab = find_tab_by_handle(tabpage, err);
@@ -458,7 +459,7 @@ Object tabpage_set_var(Tabpage tabpage, String name, Object value, Error *err)
     return NIL;
   }
 
-  return dict_set_var(tab->tp_vars, name, value, false, true, err);
+  return dict_set_var(tab->tp_vars, name, value, false, true, arena, err);
 }
 
 /// Removes a tab-scoped (t:) variable
@@ -469,7 +470,7 @@ Object tabpage_set_var(Tabpage tabpage, String name, Object value, Error *err)
 /// @param name     Variable name
 /// @param[out] err Error details, if any
 /// @return Old value
-Object tabpage_del_var(Tabpage tabpage, String name, Error *err)
+Object tabpage_del_var(Tabpage tabpage, String name, Arena *arena, Error *err)
   FUNC_API_DEPRECATED_SINCE(1)
 {
   tabpage_T *tab = find_tab_by_handle(tabpage, err);
@@ -478,7 +479,7 @@ Object tabpage_del_var(Tabpage tabpage, String name, Error *err)
     return NIL;
   }
 
-  return dict_set_var(tab->tp_vars, name, NIL, true, true, err);
+  return dict_set_var(tab->tp_vars, name, NIL, true, true, arena, err);
 }
 
 /// @deprecated
@@ -486,18 +487,18 @@ Object tabpage_del_var(Tabpage tabpage, String name, Error *err)
 /// @warning May return nil if there was no previous value
 ///          OR if previous value was `v:null`.
 /// @return Old value or nil if there was no previous value.
-Object vim_set_var(String name, Object value, Error *err)
+Object vim_set_var(String name, Object value, Arena *arena, Error *err)
   FUNC_API_DEPRECATED_SINCE(1)
 {
-  return dict_set_var(&globvardict, name, value, false, true, err);
+  return dict_set_var(&globvardict, name, value, false, true, arena, err);
 }
 
 /// @deprecated
 /// @see nvim_del_var
-Object vim_del_var(String name, Error *err)
+Object vim_del_var(String name, Arena *arena, Error *err)
   FUNC_API_DEPRECATED_SINCE(1)
 {
-  return dict_set_var(&globvardict, name, NIL, true, true, err);
+  return dict_set_var(&globvardict, name, NIL, true, true, arena, err);
 }
 
 static int64_t convert_index(int64_t index)
@@ -512,11 +513,11 @@ static int64_t convert_index(int64_t index)
 /// @param          name Option name
 /// @param[out] err Error details, if any
 /// @return         Option Information
-Dictionary nvim_get_option_info(String name, Error *err)
+Dictionary nvim_get_option_info(String name, Arena *arena, Error *err)
   FUNC_API_SINCE(7)
   FUNC_API_DEPRECATED_SINCE(11)
 {
-  return get_vimoption(name, OPT_GLOBAL, curbuf, curwin, err);
+  return get_vimoption(name, OPT_GLOBAL, curbuf, curwin, arena, err);
 }
 
 /// Sets the global value of an option.

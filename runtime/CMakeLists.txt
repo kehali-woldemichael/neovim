@@ -1,9 +1,9 @@
-set(SYN_VIM_GENERATOR ${PROJECT_SOURCE_DIR}/src/nvim/generators/gen_vimvim.lua)
 set(GENERATED_RUNTIME_DIR ${PROJECT_BINARY_DIR}/runtime)
-set(GENERATED_SYN_VIM ${GENERATED_RUNTIME_DIR}/syntax/vim/generated.vim)
+
 set(GENERATED_HELP_TAGS ${GENERATED_RUNTIME_DIR}/doc/tags)
 set(GENERATED_PACKAGE_DIR ${GENERATED_RUNTIME_DIR}/pack/dist/opt)
-set(FUNCS_DATA ${PROJECT_BINARY_DIR}/funcs_data.mpack)
+set(GENERATED_SYN_VIM ${GENERATED_RUNTIME_DIR}/syntax/vim/generated.vim)
+set(SYN_VIM_GENERATOR ${PROJECT_SOURCE_DIR}/src/nvim/generators/gen_vimvim.lua)
 
 file(MAKE_DIRECTORY ${GENERATED_RUNTIME_DIR}/syntax/vim)
 
@@ -33,10 +33,10 @@ foreach(PACKAGE ${PACKAGES})
     add_custom_command(OUTPUT "${GENERATED_PACKAGE_DIR}/${PACKNAME}/doc/tags"
       COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${PACKAGE} ${GENERATED_PACKAGE_DIR}/${PACKNAME}
-      COMMAND "${PROJECT_BINARY_DIR}/bin/nvim"
+      COMMAND $<TARGET_FILE:nvim_bin>
         -u NONE -i NONE -e --headless -c "helptags doc" -c quit
       DEPENDS
-        nvim
+        nvim_bin
         nvim_runtime_deps
       WORKING_DIRECTORY "${GENERATED_PACKAGE_DIR}/${PACKNAME}"
     )
@@ -55,8 +55,6 @@ foreach(PACKAGE ${PACKAGES})
   endif()
 endforeach()
 
-file(GLOB DOCFILES CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/runtime/doc/*.txt)
-
 set(BUILDDOCFILES)
 foreach(DF ${DOCFILES})
   get_filename_component(F ${DF} NAME)
@@ -67,25 +65,16 @@ add_custom_command(OUTPUT ${GENERATED_HELP_TAGS}
   COMMAND ${CMAKE_COMMAND} -E remove_directory doc
   COMMAND ${CMAKE_COMMAND} -E copy_directory
     ${PROJECT_SOURCE_DIR}/runtime/doc doc
-  COMMAND "${PROJECT_BINARY_DIR}/bin/nvim"
+  COMMAND $<TARGET_FILE:nvim_bin>
     -u NONE -i NONE -e --headless -c "helptags ++t doc" -c quit
   DEPENDS
-    nvim
+    nvim_bin
     nvim_runtime_deps
   WORKING_DIRECTORY "${GENERATED_RUNTIME_DIR}"
 )
 
-# TODO: This doesn't work. wait for "nvim -l" to land?
-add_custom_target(doc_html
-  COMMAND "${PROJECT_BINARY_DIR}/bin/nvim"
-    -V1 -es --clean -c "lua require('scripts.gen_help_html').gen('./build/runtime/doc', './build/doc_html', nil, 'todo_commit_id')" -c "0cq"
-  DEPENDS
-    ${GENERATED_HELP_TAGS}
-  WORKING_DIRECTORY "${GENERATED_RUNTIME_DIR}/doc"
-)
-
 add_custom_target(
-  runtime ALL
+  nvim_runtime
   DEPENDS
     ${GENERATED_SYN_VIM}
     ${GENERATED_HELP_TAGS}

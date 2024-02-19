@@ -8,30 +8,36 @@
 
 #include "nvim/ascii_defs.h"
 #include "nvim/buffer.h"
+#include "nvim/buffer_defs.h"
 #include "nvim/change.h"
 #include "nvim/charset.h"
 #include "nvim/cmdexpand.h"
+#include "nvim/cmdexpand_defs.h"
 #include "nvim/ex_cmds.h"
 #include "nvim/ex_cmds_defs.h"
 #include "nvim/ex_docmd.h"
 #include "nvim/extmark_defs.h"
 #include "nvim/fileio.h"
 #include "nvim/garray.h"
-#include "nvim/gettext.h"
+#include "nvim/garray_defs.h"
+#include "nvim/gettext_defs.h"
 #include "nvim/globals.h"
 #include "nvim/help.h"
 #include "nvim/macros_defs.h"
 #include "nvim/mark.h"
 #include "nvim/mbyte.h"
+#include "nvim/mbyte_defs.h"
 #include "nvim/memline.h"
 #include "nvim/memory.h"
 #include "nvim/message.h"
 #include "nvim/option.h"
+#include "nvim/option_defs.h"
 #include "nvim/option_vars.h"
 #include "nvim/optionstr.h"
 #include "nvim/os/fs.h"
 #include "nvim/os/input.h"
 #include "nvim/os/os.h"
+#include "nvim/os/os_defs.h"
 #include "nvim/path.h"
 #include "nvim/pos_defs.h"
 #include "nvim/runtime.h"
@@ -171,9 +177,9 @@ void ex_help(exarg_T *eap)
       // set b_p_ro flag).
       // Set the alternate file to the previously edited file.
       alt_fnum = curbuf->b_fnum;
-      (void)do_ecmd(0, NULL, NULL, NULL, ECMD_LASTL,
-                    ECMD_HIDE + ECMD_SET_HELP,
-                    NULL);  // buffer is still open, don't store info
+      do_ecmd(0, NULL, NULL, NULL, ECMD_LASTL,
+              ECMD_HIDE + ECMD_SET_HELP,
+              NULL);  // buffer is still open, don't store info
 
       if ((cmdmod.cmod_flags & CMOD_KEEPALT) == 0) {
         curwin->w_alt_fnum = alt_fnum;
@@ -251,7 +257,7 @@ char *check_help_lang(char *arg)
 /// @param wrong_case  no matching case
 ///
 /// @return  a heuristic indicating how well the given string matches.
-int help_heuristic(char *matched_string, int offset, int wrong_case)
+int help_heuristic(char *matched_string, int offset, bool wrong_case)
   FUNC_ATTR_PURE
 {
   int num_letters = 0;
@@ -607,7 +613,7 @@ void cleanup_help_tags(int num_file, char **file)
 void prepare_help_buffer(void)
 {
   curbuf->b_help = true;
-  set_string_option_direct(kOptBuftype, "help", OPT_FREE|OPT_LOCAL, 0);
+  set_string_option_direct(kOptBuftype, "help", OPT_LOCAL, 0);
 
   // Always set these options after jumping to a help tag, because the
   // user may have an autocommand that gets in the way.
@@ -616,13 +622,13 @@ void prepare_help_buffer(void)
   // Only set it when needed, buf_init_chartab() is some work.
   char *p = "!-~,^*,^|,^\",192-255";
   if (strcmp(curbuf->b_p_isk, p) != 0) {
-    set_string_option_direct(kOptIskeyword, p, OPT_FREE|OPT_LOCAL, 0);
+    set_string_option_direct(kOptIskeyword, p, OPT_LOCAL, 0);
     check_buf_options(curbuf);
-    (void)buf_init_chartab(curbuf, false);
+    buf_init_chartab(curbuf, false);
   }
 
   // Don't use the global foldmethod.
-  set_string_option_direct(kOptFoldmethod, "manual", OPT_FREE|OPT_LOCAL, 0);
+  set_string_option_direct(kOptFoldmethod, "manual", OPT_LOCAL, 0);
 
   curbuf->b_p_ts = 8;         // 'tabstop' is 8.
   curwin->w_p_list = false;   // No list mode.
@@ -695,6 +701,9 @@ void get_local_additions(void)
               const char *const f1 = fnames[i1];
               const char *const t1 = path_tail(f1);
               const char *const e1 = strrchr(t1, '.');
+              if (e1 == NULL) {
+                continue;
+              }
               if (path_fnamecmp(e1, ".txt") != 0
                   && path_fnamecmp(e1, fname + 4) != 0) {
                 // Not .txt and not .abx, remove it.
@@ -709,7 +718,7 @@ void get_local_additions(void)
                 }
                 const char *const t2 = path_tail(f2);
                 const char *const e2 = strrchr(t2, '.');
-                if (e1 == NULL || e2 == NULL) {
+                if (e2 == NULL) {
                   continue;
                 }
                 if (e1 - f1 != e2 - f2
@@ -794,7 +803,7 @@ void get_local_additions(void)
       linenr_T appended = lnum - lnum_start;
       if (appended) {
         mark_adjust(lnum_start + 1, (linenr_T)MAXLNUM, appended, 0, kExtmarkUndo);
-        buf_redraw_changed_lines_later(curbuf, lnum_start + 1, lnum_start + 1, appended);
+        changed_lines_redraw_buf(curbuf, lnum_start + 1, lnum_start + 1, appended);
       }
       break;
     }

@@ -17,6 +17,7 @@
 #include "nvim/api/private/helpers.h"
 #include "nvim/ascii_defs.h"
 #include "nvim/autocmd.h"
+#include "nvim/autocmd_defs.h"
 #include "nvim/buffer_defs.h"
 #include "nvim/charset.h"
 #include "nvim/cmdexpand.h"
@@ -27,15 +28,18 @@
 #include "nvim/ex_cmds_defs.h"
 #include "nvim/ex_docmd.h"
 #include "nvim/ex_eval.h"
+#include "nvim/ex_eval_defs.h"
 #include "nvim/garray.h"
 #include "nvim/getchar.h"
-#include "nvim/gettext.h"
+#include "nvim/gettext_defs.h"
 #include "nvim/globals.h"
 #include "nvim/hashtab.h"
+#include "nvim/hashtab_defs.h"
 #include "nvim/lua/executor.h"
 #include "nvim/macros_defs.h"
 #include "nvim/map_defs.h"
 #include "nvim/mbyte.h"
+#include "nvim/mbyte_defs.h"
 #include "nvim/memline.h"
 #include "nvim/memory.h"
 #include "nvim/message.h"
@@ -45,11 +49,13 @@
 #include "nvim/os/fs.h"
 #include "nvim/os/input.h"
 #include "nvim/os/os.h"
+#include "nvim/os/os_defs.h"
 #include "nvim/os/stdpaths_defs.h"
 #include "nvim/path.h"
 #include "nvim/pos_defs.h"
 #include "nvim/profile.h"
 #include "nvim/regexp.h"
+#include "nvim/regexp_defs.h"
 #include "nvim/runtime.h"
 #include "nvim/strings.h"
 #include "nvim/types_defs.h"
@@ -303,7 +309,7 @@ static bool source_callback_vim_lua(int num_fnames, char **fnames, bool all, voi
 
   for (int i = 0; i < num_fnames; i++) {
     if (path_with_extension(fnames[i], "vim")) {
-      (void)do_source(fnames[i], false, DOSO_NONE, cookie);
+      do_source(fnames[i], false, DOSO_NONE, cookie);
       did_one = true;
       if (!all) {
         return true;
@@ -313,7 +319,7 @@ static bool source_callback_vim_lua(int num_fnames, char **fnames, bool all, voi
 
   for (int i = 0; i < num_fnames; i++) {
     if (path_with_extension(fnames[i], "lua")) {
-      (void)do_source(fnames[i], false, DOSO_NONE, cookie);
+      do_source(fnames[i], false, DOSO_NONE, cookie);
       did_one = true;
       if (!all) {
         return true;
@@ -337,7 +343,7 @@ static bool source_callback(int num_fnames, char **fnames, bool all, void *cooki
   for (int i = 0; i < num_fnames; i++) {
     if (!path_with_extension(fnames[i], "vim")
         && !path_with_extension(fnames[i], "lua")) {
-      (void)do_source(fnames[i], false, DOSO_NONE, cookie);
+      do_source(fnames[i], false, DOSO_NONE, cookie);
       did_one = true;
       if (!all) {
         return true;
@@ -586,13 +592,13 @@ Array runtime_inspect(void)
   return rv;
 }
 
-ArrayOf(String) runtime_get_named(bool lua, Array pat, bool all)
+ArrayOf(String) runtime_get_named(bool lua, Array pat, bool all, Arena *arena)
 {
   int ref;
   RuntimeSearchPath path = runtime_search_path_get_cached(&ref);
   static char buf[MAXPATHL];
 
-  ArrayOf(String) rv = runtime_get_named_common(lua, pat, all, path, buf, sizeof buf);
+  ArrayOf(String) rv = runtime_get_named_common(lua, pat, all, path, buf, sizeof buf, arena);
 
   runtime_search_path_unref(path, &ref);
   return rv;
@@ -604,15 +610,16 @@ ArrayOf(String) runtime_get_named_thread(bool lua, Array pat, bool all)
   uv_mutex_lock(&runtime_search_path_mutex);
   static char buf[MAXPATHL];
   ArrayOf(String) rv = runtime_get_named_common(lua, pat, all, runtime_search_path_thread,
-                                                buf, sizeof buf);
+                                                buf, sizeof buf, NULL);
   uv_mutex_unlock(&runtime_search_path_mutex);
   return rv;
 }
 
 static ArrayOf(String) runtime_get_named_common(bool lua, Array pat, bool all,
-                                                RuntimeSearchPath path, char *buf, size_t buf_len)
+                                                RuntimeSearchPath path, char *buf, size_t buf_len,
+                                                Arena *arena)
 {
-  ArrayOf(String) rv = ARRAY_DICT_INIT;
+  ArrayOf(String) rv = arena_array(arena, kv_size(path) * pat.size);
   for (size_t i = 0; i < kv_size(path); i++) {
     SearchPathItem *item = &kv_A(path, i);
     if (lua) {
@@ -632,7 +639,7 @@ static ArrayOf(String) runtime_get_named_common(bool lua, Array pat, bool all,
                                        item->path, pat_item.data.string.data);
         if (size < buf_len) {
           if (os_file_is_readable(buf)) {
-            ADD(rv, CSTR_TO_OBJ(buf));
+            ADD_C(rv, CSTR_TO_ARENA_OBJ(arena, buf));
             if (!all) {
               goto done;
             }
@@ -1085,7 +1092,7 @@ static int load_pack_plugin(bool opt, char *fname)
   size_t len = strlen(ffname) + sizeof(plugpat);
   char *pat = xmallocz(len);
 
-  vim_snprintf(pat, len, plugpat, ffname);  // NOLINT
+  vim_snprintf(pat, len, plugpat, ffname);
   gen_expand_wildcards_and_cb(1, &pat, EW_FILE, true, source_callback_vim_lua, NULL);
 
   char *cmd = xstrdup("g:did_load_filetypes");
@@ -1773,7 +1780,7 @@ freeall:
 static void cmd_source(char *fname, exarg_T *eap)
 {
   if (eap != NULL && *fname == NUL) {
-    cmd_source_buffer(eap);
+    cmd_source_buffer(eap, false);
   } else if (eap != NULL && eap->forceit) {
     // ":source!": read Normal mode commands
     // Need to execute the commands directly.  This is required at least
@@ -1804,7 +1811,7 @@ void ex_options(exarg_T *eap)
   bool multi_mods = 0;
 
   buf[0] = NUL;
-  (void)add_win_cmd_modifiers(buf, &cmdmod, &multi_mods);
+  add_win_cmd_modifiers(buf, &cmdmod, &multi_mods);
 
   os_setenv("OPTWIN_CMD", buf, 1);
   cmd_source(SYS_OPTWIN_FILE, NULL);
@@ -1845,7 +1852,7 @@ static FILE *fopen_noinh_readbin(char *filename)
     return NULL;
   }
 
-  (void)os_set_cloexec(fd_tmp);
+  os_set_cloexec(fd_tmp);
 
   return fdopen(fd_tmp, READBIN);
 }
@@ -1983,7 +1990,7 @@ static int source_using_linegetter(void *cookie, LineGetter fgetline, const char
   return retval;
 }
 
-static void cmd_source_buffer(const exarg_T *const eap)
+void cmd_source_buffer(const exarg_T *const eap, bool ex_lua)
   FUNC_ATTR_NONNULL_ALL
 {
   if (curbuf == NULL) {
@@ -2006,9 +2013,10 @@ static void cmd_source_buffer(const exarg_T *const eap)
     .buf = ga.ga_data,
     .offset = 0,
   };
-  if (strequal(curbuf->b_p_ft, "lua")
+  if (ex_lua || strequal(curbuf->b_p_ft, "lua")
       || (curbuf->b_fname && path_with_extension(curbuf->b_fname, "lua"))) {
-    nlua_source_using_linegetter(get_str_line, (void *)&cookie, ":source (no file)");
+    char *name = ex_lua ? ":{range}lua" : ":source (no file)";
+    nlua_source_using_linegetter(get_str_line, (void *)&cookie, name);
   } else {
     source_using_linegetter((void *)&cookie, get_str_line, ":source (no file)");
   }
@@ -2623,7 +2631,7 @@ static char *get_one_sourceline(struct source_cookie *sp)
   int c;
   char *buf;
 #ifdef USE_CRNL
-  int has_cr;                           // CR-LF found
+  bool has_cr;                           // CR-LF found
 #endif
   bool have_read = false;
 

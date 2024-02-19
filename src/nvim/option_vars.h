@@ -1,6 +1,8 @@
 #pragma once
 
 #include "nvim/macros_defs.h"
+#include "nvim/os/os_defs.h"
+#include "nvim/sign_defs.h"
 #include "nvim/types_defs.h"
 
 // option_vars.h: definition of global variables for settable options
@@ -25,8 +27,8 @@
 #define P_RSTAT        0x200U       ///< redraw status lines
 #define P_RWIN         0x400U       ///< redraw current window and recompute text
 #define P_RBUF         0x800U       ///< redraw current buffer and recompute text
-#define P_RALL         0xC00U       ///< redraw all windows
-#define P_RCLR         0xE00U       ///< clear and redraw all
+#define P_RALL         0xC00U       ///< redraw all windows and recompute text
+#define P_RCLR         0xE00U       ///< clear and redraw all and recompute text
 
 #define P_COMMA        0x1000U      ///< comma separated list
 #define P_ONECOMMA     0x3000U      ///< P_COMMA and cannot have two consecutive
@@ -45,7 +47,7 @@
 #define P_CURSWANT     0x800000U    ///< update curswant required; not needed
                                     ///< when there is a redraw flag
 #define P_NDNAME       0x1000000U   ///< only normal dir name chars allowed
-#define P_RWINONLY     0x2000000U   ///< only redraw current window
+#define P_HLONLY       0x2000000U   ///< option only changes highlight, not text
 #define P_MLE          0x4000000U   ///< under control of 'modelineexpr'
 #define P_FUNC         0x8000000U   ///< accept a function reference or a lambda
 #define P_COLON        0x10000000U  ///< values use colons to create sublists
@@ -151,7 +153,6 @@
 #define CPO_NUMCOL      'n'     // 'number' column also used for text
 #define CPO_LINEOFF     'o'
 #define CPO_OVERNEW     'O'     // silently overwrite new file
-#define CPO_LISP        'p'     // 'lisp' indenting
 #define CPO_FNAMEAPP    'P'     // set file name for ":w >>file"
 #define CPO_JOINCOL     'q'     // with "3J" use column after first join
 #define CPO_REDO        'r'
@@ -217,7 +218,7 @@ enum {
   SHM_INTRO          = 'I',  ///< Intro messages.
   SHM_COMPLETIONMENU = 'c',  ///< Completion menu messages.
   SHM_COMPLETIONSCAN = 'C',  ///< Completion scanning messages.
-  SHM_RECORDING      = 'q',  ///< Short recording message.
+  SHM_RECORDING      = 'q',  ///< No recording message.
   SHM_FILEINFO       = 'F',  ///< No file info messages.
   SHM_SEARCHCOUNT    = 'S',  ///< No search stats: '[1/10]'
 };
@@ -779,156 +780,6 @@ EXTERN int p_wb;                ///< 'writebackup'
 EXTERN OptInt p_wd;             ///< 'writedelay'
 EXTERN int p_cdh;               ///< 'cdhome'
 
-/// "indir" values for buffer-local options.
-/// These need to be defined globally, so that the BV_COUNT can be used with
-/// b_p_script_stx[].
-enum {
-  BV_AI = 0,
-  BV_AR,
-  BV_BH,
-  BV_BKC,
-  BV_BT,
-  BV_EFM,
-  BV_GP,
-  BV_MP,
-  BV_BIN,
-  BV_BL,
-  BV_BOMB,
-  BV_CHANNEL,
-  BV_CI,
-  BV_CIN,
-  BV_CINK,
-  BV_CINO,
-  BV_CINW,
-  BV_CINSD,
-  BV_CM,
-  BV_CMS,
-  BV_COM,
-  BV_CPT,
-  BV_DICT,
-  BV_TSR,
-  BV_CSL,
-  BV_CFU,
-  BV_DEF,
-  BV_INC,
-  BV_EOF,
-  BV_EOL,
-  BV_FIXEOL,
-  BV_EP,
-  BV_ET,
-  BV_FENC,
-  BV_FP,
-  BV_BEXPR,
-  BV_FEX,
-  BV_FF,
-  BV_FLP,
-  BV_FO,
-  BV_FT,
-  BV_IMI,
-  BV_IMS,
-  BV_INDE,
-  BV_INDK,
-  BV_INEX,
-  BV_INF,
-  BV_ISK,
-  BV_KMAP,
-  BV_KP,
-  BV_LISP,
-  BV_LOP,
-  BV_LW,
-  BV_MENC,
-  BV_MA,
-  BV_ML,
-  BV_MOD,
-  BV_MPS,
-  BV_NF,
-  BV_OFU,
-  BV_PATH,
-  BV_PI,
-  BV_QE,
-  BV_RO,
-  BV_SCBK,
-  BV_SI,
-  BV_SMC,
-  BV_SYN,
-  BV_SPC,
-  BV_SPF,
-  BV_SPL,
-  BV_SPO,
-  BV_STS,
-  BV_SUA,
-  BV_SW,
-  BV_SWF,
-  BV_TFU,
-  BV_TSRFU,
-  BV_TAGS,
-  BV_TC,
-  BV_TS,
-  BV_TW,
-  BV_TX,
-  BV_UDF,
-  BV_UL,
-  BV_WM,
-  BV_VSTS,
-  BV_VTS,
-  BV_COUNT,  // must be the last one
-};
-
-/// "indir" values for window-local options.
-/// These need to be defined globally, so that the WV_COUNT can be used in the
-/// window structure.
-enum {
-  WV_LIST = 0,
-  WV_ARAB,
-  WV_COCU,
-  WV_COLE,
-  WV_CRBIND,
-  WV_BRI,
-  WV_BRIOPT,
-  WV_DIFF,
-  WV_FDC,
-  WV_FEN,
-  WV_FDI,
-  WV_FDL,
-  WV_FDM,
-  WV_FML,
-  WV_FDN,
-  WV_FDE,
-  WV_FDT,
-  WV_FMR,
-  WV_LBR,
-  WV_NU,
-  WV_RNU,
-  WV_VE,
-  WV_NUW,
-  WV_PVW,
-  WV_RL,
-  WV_RLC,
-  WV_SCBIND,
-  WV_SCROLL,
-  WV_SMS,
-  WV_SISO,
-  WV_SO,
-  WV_SPELL,
-  WV_CUC,
-  WV_CUL,
-  WV_CULOPT,
-  WV_CC,
-  WV_SBR,
-  WV_STC,
-  WV_STL,
-  WV_WFH,
-  WV_WFW,
-  WV_WRAP,
-  WV_SCL,
-  WV_WINHL,
-  WV_LCS,
-  WV_FCS,
-  WV_WINBL,
-  WV_WBR,
-  WV_COUNT,  // must be the last one
-};
-
 // Value for b_p_ul indicating the global value must be used.
 #define NO_LOCAL_UNDOLEVEL (-123456)
 
@@ -936,7 +787,10 @@ enum {
 
 #define SB_MAX 100000  // Maximum 'scrollback' value.
 
-#define MAX_NUMBERWIDTH 20      // used for 'numberwidth' and 'statuscolumn'
+#define MAX_NUMBERWIDTH 20      // used for 'numberwidth'
+
+// Maximum 'statuscolumn' width: number + sign + fold columns
+#define MAX_STCWIDTH MAX_NUMBERWIDTH + SIGN_SHOW_MAX * SIGN_WIDTH + 9
 
 #define TABSTOP_MAX 9999
 

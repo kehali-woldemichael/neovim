@@ -1,6 +1,8 @@
 local helpers = require('test.functional.helpers')(after_each)
 local Screen = require('test.functional.ui.screen')
+local api = helpers.api
 local clear = helpers.clear
+local eq = helpers.eq
 local exec_lua = helpers.exec_lua
 local insert = helpers.insert
 local feed = helpers.feed
@@ -236,16 +238,16 @@ describe("'inccommand' for user commands", function()
     clear()
     screen = Screen.new(40, 17)
     screen:set_default_attr_ids({
-      [1] = {background = Screen.colors.Yellow1},
-      [2] = {foreground = Screen.colors.Blue1, bold = true},
-      [3] = {reverse = true},
-      [4] = {reverse = true, bold = true},
-      [5] = {foreground = Screen.colors.Blue},
+      [1] = { background = Screen.colors.Yellow1 },
+      [2] = { foreground = Screen.colors.Blue1, bold = true },
+      [3] = { reverse = true },
+      [4] = { reverse = true, bold = true },
+      [5] = { foreground = Screen.colors.Blue },
     })
     screen:attach()
     exec_lua(setup_replace_cmd)
     command('set cmdwinheight=5')
-    insert[[
+    insert [[
       text on line 1
       more text on line 2
       oh no, even more text
@@ -495,6 +497,22 @@ describe("'inccommand' for user commands", function()
       test_preview_break_undo()
     end)
   end)
+
+  it('disables preview if preview buffer cannot be created #27086', function()
+    command('set inccommand=split')
+    api.nvim_buf_set_name(0, '[Preview]')
+    exec_lua([[
+      vim.api.nvim_create_user_command('Test', function() end, {
+        nargs = '*',
+        preview = function(_, _, _)
+          return 2
+        end
+      })
+    ]])
+    eq('split', api.nvim_get_option_value('inccommand', {}))
+    feed(':Test')
+    eq('nosplit', api.nvim_get_option_value('inccommand', {}))
+  end)
 end)
 
 describe("'inccommand' with multiple buffers", function()
@@ -504,21 +522,21 @@ describe("'inccommand' with multiple buffers", function()
     clear()
     screen = Screen.new(40, 17)
     screen:set_default_attr_ids({
-      [1] = {background = Screen.colors.Yellow1},
-      [2] = {foreground = Screen.colors.Blue1, bold = true},
-      [3] = {reverse = true},
-      [4] = {reverse = true, bold = true}
+      [1] = { background = Screen.colors.Yellow1 },
+      [2] = { foreground = Screen.colors.Blue1, bold = true },
+      [3] = { reverse = true },
+      [4] = { reverse = true, bold = true },
     })
     screen:attach()
     exec_lua(setup_replace_cmd)
     command('set cmdwinheight=10')
-    insert[[
+    insert [[
       foo bar baz
       bar baz foo
       baz foo bar
     ]]
     command('vsplit | enew')
-    insert[[
+    insert [[
       bar baz foo
       baz foo bar
       foo bar baz

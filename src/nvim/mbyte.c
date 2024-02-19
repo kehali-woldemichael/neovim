@@ -46,9 +46,10 @@
 #include "nvim/eval/typval.h"
 #include "nvim/eval/typval_defs.h"
 #include "nvim/getchar.h"
-#include "nvim/gettext.h"
+#include "nvim/gettext_defs.h"
 #include "nvim/globals.h"
 #include "nvim/grid.h"
+#include "nvim/grid_defs.h"
 #include "nvim/iconv_defs.h"
 #include "nvim/keycodes.h"
 #include "nvim/macros_defs.h"
@@ -444,24 +445,26 @@ int mb_get_class_tab(const char *p, const uint64_t *const chartab)
 static bool intable(const struct interval *table, size_t n_items, int c)
   FUNC_ATTR_PURE
 {
+  assert(n_items > 0);
   // first quick check for Latin1 etc. characters
   if (c < table[0].first) {
     return false;
   }
 
+  assert(n_items <= SIZE_MAX / 2);
   // binary search in table
-  int bot = 0;
-  int top = (int)(n_items - 1);
-  while (top >= bot) {
-    int mid = (bot + top) / 2;
+  size_t bot = 0;
+  size_t top = n_items;
+  do {
+    size_t mid = (bot + top) >> 1;
     if (table[mid].last < c) {
       bot = mid + 1;
     } else if (table[mid].first > c) {
-      top = mid - 1;
+      top = mid;
     } else {
       return true;
     }
-  }
+  } while (top > bot);
   return false;
 }
 
@@ -475,32 +478,28 @@ static bool intable(const struct interval *table, size_t n_items, int c)
 ///       gen_unicode_tables.lua, which must be manually invoked as needed.
 int utf_char2cells(int c)
 {
-  // Use the value from setcellwidths() at 0x80 and higher, unless the
-  // character is not printable.
-  if (c >= 0x80 && vim_isprintc(c)) {
-    int n = cw_value(c);
-    if (n != 0) {
-      return n;
-    }
+  if (c < 0x80) {
+    return 1;
   }
 
-  if (c >= 0x100) {
-    if (!utf_printable(c)) {
-      return 6;                 // unprintable, displays <xxxx>
-    }
-    if (intable(doublewidth, ARRAY_SIZE(doublewidth), c)) {
-      return 2;
-    }
-    if (p_emoji && intable(emoji_wide, ARRAY_SIZE(emoji_wide), c)) {
-      return 2;
-    }
-  } else if (c >= 0x80 && !vim_isprintc(c)) {
-    // Characters below 0x100 are influenced by 'isprint' option.
-    return 4;                   // unprintable, displays <xx>
+  if (!vim_isprintc(c)) {
+    assert(c <= 0xFFFF);
+    // unprintable is displayed either as <xx> or <xxxx>
+    return c > 0xFF ? 6 : 4;
   }
 
-  if (c >= 0x80 && *p_ambw == 'd'
-      && intable(ambiguous, ARRAY_SIZE(ambiguous), c)) {
+  int n = cw_value(c);
+  if (n != 0) {
+    return n;
+  }
+
+  if (intable(doublewidth, ARRAY_SIZE(doublewidth), c)) {
+    return 2;
+  }
+  if (p_emoji && intable(emoji_wide, ARRAY_SIZE(emoji_wide), c)) {
+    return 2;
+  }
+  if (*p_ambw == 'd' && intable(ambiguous, ARRAY_SIZE(ambiguous), c)) {
     return 2;
   }
 
@@ -525,6 +524,74 @@ int utf_ptr2cells(const char *p)
     return utf_char2cells(c);
   }
   return 1;
+}
+
+/// Convert a UTF-8 byte sequence to a character number.
+/// Doesn't handle ascii! only multibyte and illegal sequences.
+///
+/// @param[in]  p      String to convert.
+/// @param[in]  len    Length of the character in bytes, 0 or 1 if illegal.
+///
+/// @return Unicode codepoint. A negative value when the sequence is illegal.
+int32_t utf_ptr2CharInfo_impl(uint8_t const *p, uintptr_t const len)
+  FUNC_ATTR_PURE FUNC_ATTR_NONNULL_ALL FUNC_ATTR_WARN_UNUSED_RESULT
+{
+// uint8_t is a reminder for clang to use smaller cmp
+#define CHECK \
+  do { \
+    if (EXPECT((uint8_t)(cur & 0xC0U) != 0x80U, false)) { \
+      return -1; \
+    } \
+  } while (0)
+
+  static uint32_t const corrections[] = {
+    (1U << 31),  // invalid - set invalid bits (safe to add as first 2 bytes
+    (1U << 31),  // won't affect highest bit in normal ret)
+    -(0x80U + (0xC0U << 6)),  // multibyte - subtract added UTF8 bits (1..10xxx and 10xxx)
+    -(0x80U + (0x80U << 6) + (0xE0U << 12)),
+    -(0x80U + (0x80U << 6) + (0x80U << 12) + (0xF0U << 18)),
+    -(0x80U + (0x80U << 6) + (0x80U << 12) + (0x80U << 18) + (0xF8U << 24)),
+    -(0x80U + (0x80U << 6) + (0x80U << 12) + (0x80U << 18) + (0x80U << 24)),  // + (0xFCU << 30)
+  };
+
+  // len is 0-6, but declared uintptr_t to avoid zeroing out upper bits
+  uint32_t const corr = corrections[len];
+  uint8_t cur;
+
+  // reading second byte unconditionally, safe for invalid
+  // as it cannot be the last byte, not safe for ascii
+  uint32_t code_point = ((uint32_t)p[0] << 6) + (cur = p[1]);
+  CHECK;
+  if ((uint32_t)len < 3) {
+    goto ret;  // len == 0, 1, 2
+  }
+
+  code_point = (code_point << 6) + (cur = p[2]);
+  CHECK;
+  if ((uint32_t)len == 3) {
+    goto ret;
+  }
+
+  code_point = (code_point << 6) + (cur = p[3]);
+  CHECK;
+  if ((uint32_t)len == 4) {
+    goto ret;
+  }
+
+  code_point = (code_point << 6) + (cur = p[4]);
+  CHECK;
+  if ((uint32_t)len == 5) {
+    goto ret;
+  }
+
+  code_point = (code_point << 6) + (cur = p[5]);
+  CHECK;
+  // len == 6
+
+ret:
+  return (int32_t)(code_point + corr);
+
+#undef CHECK
 }
 
 /// Like utf_ptr2cells(), but limit string length to "size".
@@ -596,45 +663,62 @@ size_t mb_string2cells_len(const char *str, size_t size)
 ///
 /// @return Unicode codepoint or byte value.
 int utf_ptr2char(const char *const p_in)
-  FUNC_ATTR_PURE FUNC_ATTR_WARN_UNUSED_RESULT
+  FUNC_ATTR_PURE FUNC_ATTR_WARN_UNUSED_RESULT FUNC_ATTR_NONNULL_ALL
 {
   uint8_t *p = (uint8_t *)p_in;
-  if (p[0] < 0x80) {  // Be quick for ASCII.
-    return p[0];
+
+  uint32_t const v0 = p[0];
+  if (EXPECT(v0 < 0x80U, true)) {  // Be quick for ASCII.
+    return (int)v0;
   }
 
-  const uint8_t len = utf8len_tab_zero[p[0]];
-  if (len > 1 && (p[1] & 0xc0) == 0x80) {
-    if (len == 2) {
-      return ((p[0] & 0x1f) << 6) + (p[1] & 0x3f);
-    }
-    if ((p[2] & 0xc0) == 0x80) {
-      if (len == 3) {
-        return (((p[0] & 0x0f) << 12) + ((p[1] & 0x3f) << 6)
-                + (p[2] & 0x3f));
-      }
-      if ((p[3] & 0xc0) == 0x80) {
-        if (len == 4) {
-          return (((p[0] & 0x07) << 18) + ((p[1] & 0x3f) << 12)
-                  + ((p[2] & 0x3f) << 6) + (p[3] & 0x3f));
-        }
-        if ((p[4] & 0xc0) == 0x80) {
-          if (len == 5) {
-            return (((p[0] & 0x03) << 24) + ((p[1] & 0x3f) << 18)
-                    + ((p[2] & 0x3f) << 12) + ((p[3] & 0x3f) << 6)
-                    + (p[4] & 0x3f));
-          }
-          if ((p[5] & 0xc0) == 0x80 && len == 6) {
-            return (((p[0] & 0x01) << 30) + ((p[1] & 0x3f) << 24)
-                    + ((p[2] & 0x3f) << 18) + ((p[3] & 0x3f) << 12)
-                    + ((p[4] & 0x3f) << 6) + (p[5] & 0x3f));
-          }
-        }
-      }
-    }
+  const uint8_t len = utf8len_tab[v0];
+  if (EXPECT(len < 2, false)) {
+    return (int)v0;
   }
-  // Illegal value: just return the first byte.
-  return p[0];
+
+#define CHECK(v) \
+  do { \
+    if (EXPECT((uint8_t)((v) & 0xC0U) != 0x80U, false)) { \
+      return (int)v0; \
+    } \
+  } while (0)
+#define LEN_RETURN(len_v, result) \
+  do { \
+    if (len == (len_v)) { \
+      return (int)(result); \
+    } \
+  } while (0)
+#define S(s) ((uint32_t)0x80U << (s))
+
+  uint32_t const v1 = p[1];
+  CHECK(v1);
+  LEN_RETURN(2, (v0 << 6) + v1 - ((0xC0U << 6) + S(0)));
+
+  uint32_t const v2 = p[2];
+  CHECK(v2);
+  LEN_RETURN(3, (v0 << 12) + (v1 << 6) + v2 - ((0xE0U << 12) + S(6) + S(0)));
+
+  uint32_t const v3 = p[3];
+  CHECK(v3);
+  LEN_RETURN(4, (v0 << 18) + (v1 << 12) + (v2 << 6) + v3
+             - ((0xF0U << 18) + S(12) + S(6) + S(0)));
+
+  uint32_t const v4 = p[4];
+  CHECK(v4);
+  LEN_RETURN(5, (v0 << 24) + (v1 << 18) + (v2 << 12) + (v3 << 6) + v4
+             - ((0xF8U << 24) + S(18) + S(12) + S(6) + S(0)));
+
+  uint32_t const v5 = p[5];
+  CHECK(v5);
+  // len == 6
+  return (int)((v0 << 30) + (v1 << 24) + (v2 << 18) + (v3 << 12) + (v4 << 6) + v5
+               // - (0xFCU << 30)
+               - (S(24) + S(18) + S(12) + S(6) + S(0)));
+
+#undef S
+#undef CHECK
+#undef LEN_RETURN
 }
 
 // Convert a UTF-8 byte sequence to a wide character.
@@ -719,6 +803,16 @@ bool utf_composinglike(const char *p1, const char *p2)
     return false;
   }
   return arabic_combine(utf_ptr2char(p1), c2);
+}
+
+/// Check if the next character is a composing character when it
+/// comes after the first. For Arabic sometimes "ab" is replaced with "c", which
+/// behaves like a composing character.
+/// returns false for negative values
+bool utf_char_composinglike(int32_t const first, int32_t const next)
+  FUNC_ATTR_PURE
+{
+  return utf_iscomposing(next) || arabic_combine(first, next);
 }
 
 /// Get the screen char at the beginning of a string
@@ -987,17 +1081,61 @@ int utf_char2bytes(const int c, char *const buf)
   }
 }
 
-// Return true if "c" is a composing UTF-8 character.  This means it will be
-// drawn on top of the preceding character.
-// Based on code from Markus Kuhn.
+/// Return true if "c" is a composing UTF-8 character.
+/// This means it will be drawn on top of the preceding character.
+/// Based on code from Markus Kuhn.
+/// Returns false for negative values.
 bool utf_iscomposing(int c)
 {
   return intable(combining, ARRAY_SIZE(combining), c);
 }
 
+#ifdef __SSE2__
+
+# include <emmintrin.h>
+
 // Return true for characters that can be displayed in a normal way.
 // Only for characters of 0x100 and above!
 bool utf_printable(int c)
+  FUNC_ATTR_CONST
+{
+  if (c < 0x180B || c > 0xFFFF) {
+    return c != 0x70F;
+  }
+
+# define L(v) ((int16_t)((v) - 1))  // lower bound (exclusive)
+# define H(v) ((int16_t)(v))  // upper bound (inclusive)
+
+  // Boundaries of unprintable characters.
+  // Some values are negative when converted to int16_t.
+  // Ranges must not wrap around when converted to int16_t.
+  __m128i const lo = _mm_setr_epi16(L(0x180b), L(0x200b), L(0x202a), L(0x2060),
+                                    L(0xd800), L(0xfeff), L(0xfff9), L(0xfffe));
+
+  __m128i const hi = _mm_setr_epi16(H(0x180e), H(0x200f), H(0x202e), H(0x206f),
+                                    H(0xdfff), H(0xfeff), H(0xfffb), H(0xffff));
+
+# undef L
+# undef H
+
+  __m128i value = _mm_set1_epi16((int16_t)c);
+
+  // Using _mm_cmplt_epi16() is less optimal, since it would require
+  // swapping operands (sse2 only has cmpgt instruction),
+  // and only the second operand can be a memory location.
+
+  // Character is printable when it is above/below both bounds of each range
+  // (corresponding bits in both masks are equal).
+  return _mm_movemask_epi8(_mm_cmpgt_epi16(value, lo))
+         == _mm_movemask_epi8(_mm_cmpgt_epi16(value, hi));
+}
+
+#else
+
+// Return true for characters that can be displayed in a normal way.
+// Only for characters of 0x100 and above!
+bool utf_printable(int c)
+  FUNC_ATTR_PURE
 {
   // Sorted list of non-overlapping intervals.
   // 0xd800-0xdfff is reserved for UTF-16, actually illegal.
@@ -1009,6 +1147,8 @@ bool utf_printable(int c)
 
   return !intable(nonprint, ARRAY_SIZE(nonprint), c);
 }
+
+#endif
 
 // Get class of a Unicode character.
 // 0: white space
@@ -1182,6 +1322,9 @@ int utf_fold(int a)
 // islower()/toupper() etc. do not work properly: they crash when used with
 // invalid values or can't handle latin1 when the locale is C.
 // Speed is most important here.
+
+// Note: UnicodeData.txt does not define U+1E9E as being the corresponding upper
+// case letter for U+00DF (ß), however it is part of the toLower table
 
 /// Return the upper-case equivalent of "a", which is a UCS-4 character.  Use
 /// simple case folding.
@@ -2251,7 +2394,7 @@ void *my_iconv_open(char *to, char *from)
     // stops for no apparent reason after about 8160 characters.
     char *p = tobuf;
     size_t tolen = ICONV_TESTLEN;
-    (void)iconv(fd, NULL, NULL, &p, &tolen);
+    iconv(fd, NULL, NULL, &p, &tolen);
     if (p == NULL) {
       iconv_working = kBroken;
       iconv_close(fd);
@@ -2652,8 +2795,10 @@ static int tv_nr_compare(const void *a1, const void *a2)
 {
   const listitem_T *const li1 = tv_list_first(*(const list_T **)a1);
   const listitem_T *const li2 = tv_list_first(*(const list_T **)a2);
+  const varnumber_T n1 = TV_LIST_ITEM_TV(li1)->vval.v_number;
+  const varnumber_T n2 = TV_LIST_ITEM_TV(li2)->vval.v_number;
 
-  return (int)(TV_LIST_ITEM_TV(li1)->vval.v_number - TV_LIST_ITEM_TV(li2)->vval.v_number);
+  return n1 == n2 ? 0 : n1 > n2 ? 1 : -1;
 }
 
 /// "setcellwidths()" function
@@ -2802,4 +2947,15 @@ char *get_encoding_name(expand_T *xp FUNC_ATTR_UNUSED, int idx)
   }
 
   return (char *)enc_canon_table[idx].name;
+}
+
+/// Compare strings
+///
+/// @param[in]  ic  True if case is to be ignored.
+///
+/// @return 0 if s1 == s2, <0 if s1 < s2, >0 if s1 > s2.
+int mb_strcmp_ic(bool ic, const char *s1, const char *s2)
+  FUNC_ATTR_NONNULL_ALL FUNC_ATTR_PURE FUNC_ATTR_WARN_UNUSED_RESULT
+{
+  return (ic ? mb_stricmp(s1, s2) : strcmp(s1, s2));
 }

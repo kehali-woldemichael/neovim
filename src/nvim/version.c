@@ -16,13 +16,15 @@
 #include "nvim/api/private/helpers.h"
 #include "nvim/ascii_defs.h"
 #include "nvim/buffer.h"
+#include "nvim/buffer_defs.h"
 #include "nvim/charset.h"
 #include "nvim/drawscreen.h"
 #include "nvim/ex_cmds_defs.h"
-#include "nvim/gettext.h"
+#include "nvim/gettext_defs.h"
 #include "nvim/globals.h"
 #include "nvim/grid.h"
 #include "nvim/highlight.h"
+#include "nvim/highlight_defs.h"
 #include "nvim/lua/executor.h"
 #include "nvim/mbyte.h"
 #include "nvim/memory.h"
@@ -510,7 +512,7 @@ static const int included_patches[] = {
   1971,
   1970,
   // 1969,
-  // 1968,
+  1968,
   1967,
   1966,
   1965,
@@ -2548,21 +2550,21 @@ bool has_vim_patch(int n)
   return false;
 }
 
-Dictionary version_dict(void)
+Dictionary version_dict(Arena *arena)
 {
-  Dictionary d = ARRAY_DICT_INIT;
-  PUT(d, "major", INTEGER_OBJ(NVIM_VERSION_MAJOR));
-  PUT(d, "minor", INTEGER_OBJ(NVIM_VERSION_MINOR));
-  PUT(d, "patch", INTEGER_OBJ(NVIM_VERSION_PATCH));
+  Dictionary d = arena_dict(arena, 8);
+  PUT_C(d, "major", INTEGER_OBJ(NVIM_VERSION_MAJOR));
+  PUT_C(d, "minor", INTEGER_OBJ(NVIM_VERSION_MINOR));
+  PUT_C(d, "patch", INTEGER_OBJ(NVIM_VERSION_PATCH));
 #ifndef NVIM_VERSION_BUILD
-  PUT(d, "build", NIL);
+  PUT_C(d, "build", NIL);
 #else
-  PUT(d, "build", CSTR_AS_OBJ(NVIM_VERSION_BUILD));
+  PUT_C(d, "build", STATIC_CSTR_AS_OBJ(NVIM_VERSION_BUILD));
 #endif
-  PUT(d, "prerelease", BOOLEAN_OBJ(NVIM_VERSION_PRERELEASE[0] != '\0'));
-  PUT(d, "api_level", INTEGER_OBJ(NVIM_API_LEVEL));
-  PUT(d, "api_compatible", INTEGER_OBJ(NVIM_API_LEVEL_COMPAT));
-  PUT(d, "api_prerelease", BOOLEAN_OBJ(NVIM_API_PRERELEASE));
+  PUT_C(d, "prerelease", BOOLEAN_OBJ(NVIM_VERSION_PRERELEASE[0] != '\0'));
+  PUT_C(d, "api_level", INTEGER_OBJ(NVIM_API_LEVEL));
+  PUT_C(d, "api_compatible", INTEGER_OBJ(NVIM_API_LEVEL_COMPAT));
+  PUT_C(d, "api_prerelease", BOOLEAN_OBJ(NVIM_API_PRERELEASE));
   return d;
 }
 
@@ -2580,7 +2582,7 @@ void ex_version(exarg_T *eap)
 /// When "wrap" is true wrap the string in [].
 /// @param s
 /// @param wrap
-static void version_msg_wrap(char *s, int wrap)
+static void version_msg_wrap(char *s, bool wrap)
 {
   int len = vim_strsize(s) + (wrap ? 2 : 0);
 
@@ -2647,7 +2649,7 @@ void list_in_columns(char **items, int size, int current)
   for (int i = 0; !got_int && i < nrow * ncol; i++) {
     int idx = (i / ncol) + (i % ncol) * nrow;
     if (idx < item_count) {
-      int last_col = (i + 1) % ncol == 0;
+      bool last_col = (i + 1) % ncol == 0;
       if (idx == current) {
         msg_putchar('[');
       }
@@ -2679,9 +2681,9 @@ void list_in_columns(char **items, int size, int current)
 
 void list_lua_version(void)
 {
-  char *code = "return ((jit and jit.version) and jit.version or _VERSION)";
   Error err = ERROR_INIT;
-  Object ret = nlua_exec(cstr_as_string(code), (Array)ARRAY_DICT_INIT, &err);
+  Object ret = NLUA_EXEC_STATIC("return ((jit and jit.version) and jit.version or _VERSION)",
+                                (Array)ARRAY_DICT_INIT, kRetObject, NULL, &err);
   assert(!ERROR_SET(&err));
   assert(ret.type == kObjectTypeString);
   msg(ret.data.string.data, 0);
@@ -2706,7 +2708,6 @@ void list_version(void)
     version_msg("\"\n");
 #endif
 
-#ifdef HAVE_PATHDEF
     if (*default_vim_dir != NUL) {
       version_msg(_("  fall-back for $VIM: \""));
       version_msg(default_vim_dir);
@@ -2718,7 +2719,6 @@ void list_version(void)
       version_msg(default_vimruntime_dir);
       version_msg("\"\n");
     }
-#endif
   }
 
   version_msg(p_verbose > 0

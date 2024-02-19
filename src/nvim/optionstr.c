@@ -19,8 +19,9 @@
 #include "nvim/eval/vars.h"
 #include "nvim/ex_getln.h"
 #include "nvim/fold.h"
-#include "nvim/gettext.h"
+#include "nvim/gettext_defs.h"
 #include "nvim/globals.h"
+#include "nvim/grid.h"
 #include "nvim/highlight_group.h"
 #include "nvim/indent.h"
 #include "nvim/indent_c.h"
@@ -38,6 +39,7 @@
 #include "nvim/os/os.h"
 #include "nvim/pos_defs.h"
 #include "nvim/regexp.h"
+#include "nvim/regexp_defs.h"
 #include "nvim/spell.h"
 #include "nvim/spellfile.h"
 #include "nvim/spellsuggest.h"
@@ -60,6 +62,10 @@ static const char e_backupext_and_patchmode_are_equal[]
   = N_("E589: 'backupext' and 'patchmode' are equal");
 static const char e_showbreak_contains_unprintable_or_wide_character[]
   = N_("E595: 'showbreak' contains unprintable or wide character");
+static const char e_wrong_number_of_characters_for_field_str[]
+  = N_("E1511: Wrong number of characters for field \"%s\"");
+static const char e_wrong_character_width_for_field_str[]
+  = N_("E1512: Wrong character width for field \"%s\"");
 
 static char *(p_ambw_values[]) = { "single", "double", NULL };
 static char *(p_bg_values[]) = { "light", "dark", NULL };
@@ -148,21 +154,21 @@ static char SHM_ALL[] = { SHM_RO, SHM_MOD, SHM_LINES,
 /// option values.
 void didset_string_options(void)
 {
-  (void)opt_strings_flags(p_cmp, p_cmp_values, &cmp_flags, true);
-  (void)opt_strings_flags(p_bkc, p_bkc_values, &bkc_flags, true);
-  (void)opt_strings_flags(p_bo, p_bo_values, &bo_flags, true);
-  (void)opt_strings_flags(p_ssop, p_ssop_values, &ssop_flags, true);
-  (void)opt_strings_flags(p_vop, p_ssop_values, &vop_flags, true);
-  (void)opt_strings_flags(p_fdo, p_fdo_values, &fdo_flags, true);
-  (void)opt_strings_flags(p_dy, p_dy_values, &dy_flags, true);
-  (void)opt_strings_flags(p_jop, p_jop_values, &jop_flags, true);
-  (void)opt_strings_flags(p_rdb, p_rdb_values, &rdb_flags, true);
-  (void)opt_strings_flags(p_tc, p_tc_values, &tc_flags, false);
-  (void)opt_strings_flags(p_tpf, p_tpf_values, &tpf_flags, true);
-  (void)opt_strings_flags(p_ve, p_ve_values, &ve_flags, true);
-  (void)opt_strings_flags(p_swb, p_swb_values, &swb_flags, true);
-  (void)opt_strings_flags(p_wop, p_wop_values, &wop_flags, true);
-  (void)opt_strings_flags(p_cb, p_cb_values, &cb_flags, true);
+  opt_strings_flags(p_cmp, p_cmp_values, &cmp_flags, true);
+  opt_strings_flags(p_bkc, p_bkc_values, &bkc_flags, true);
+  opt_strings_flags(p_bo, p_bo_values, &bo_flags, true);
+  opt_strings_flags(p_ssop, p_ssop_values, &ssop_flags, true);
+  opt_strings_flags(p_vop, p_ssop_values, &vop_flags, true);
+  opt_strings_flags(p_fdo, p_fdo_values, &fdo_flags, true);
+  opt_strings_flags(p_dy, p_dy_values, &dy_flags, true);
+  opt_strings_flags(p_jop, p_jop_values, &jop_flags, true);
+  opt_strings_flags(p_rdb, p_rdb_values, &rdb_flags, true);
+  opt_strings_flags(p_tc, p_tc_values, &tc_flags, false);
+  opt_strings_flags(p_tpf, p_tpf_values, &tpf_flags, true);
+  opt_strings_flags(p_ve, p_ve_values, &ve_flags, true);
+  opt_strings_flags(p_swb, p_swb_values, &swb_flags, true);
+  opt_strings_flags(p_wop, p_wop_values, &wop_flags, true);
+  opt_strings_flags(p_cb, p_cb_values, &cb_flags, true);
 }
 
 char *illegal_char(char *errbuf, size_t errbuflen, int c)
@@ -288,10 +294,10 @@ static void set_string_option_global(vimoption_T *opt, char **varp)
 /// "set_sid" is SID_NONE don't set the scriptID.  Otherwise set the scriptID to
 /// "set_sid".
 ///
-/// @param opt_flags  OPT_FREE, OPT_LOCAL and/or OPT_GLOBAL.
+/// @param  opt_flags  Option flags.
 ///
 /// TODO(famiu): Remove this and its win/buf variants.
-void set_string_option_direct(OptIndex opt_idx, const char *val, int opt_flags, int set_sid)
+void set_string_option_direct(OptIndex opt_idx, const char *val, int opt_flags, scid_T set_sid)
 {
   vimoption_T *opt = get_option(opt_idx);
 
@@ -301,11 +307,11 @@ void set_string_option_direct(OptIndex opt_idx, const char *val, int opt_flags, 
 
   assert(opt->var != &p_shada);
 
-  int both = (opt_flags & (OPT_LOCAL | OPT_GLOBAL)) == 0;
+  bool both = (opt_flags & (OPT_LOCAL | OPT_GLOBAL)) == 0;
   char *s = xstrdup(val);
   char **varp = (char **)get_varp_scope(opt, both ? OPT_LOCAL : opt_flags);
 
-  if ((opt_flags & OPT_FREE) && (opt->flags & P_ALLOCED)) {
+  if (opt->flags & P_ALLOCED) {
     free_string_option(*varp);
   }
   *varp = s;
@@ -748,7 +754,7 @@ const char *did_set_backupcopy(optset_T *args)
         + ((*flags & BKC_YES) != 0)
         + ((*flags & BKC_NO) != 0) != 1) {
       // Must have exactly one of "auto", "yes"  and "no".
-      (void)opt_strings_flags(oldval, p_bkc_values, flags, true);
+      opt_strings_flags(oldval, p_bkc_values, flags, true);
       return e_invarg;
     }
   }
@@ -789,6 +795,22 @@ int expand_set_belloff(optexpand_T *args, int *numMatches, char ***matches)
                                ARRAY_SIZE(p_bo_values) - 1,
                                numMatches,
                                matches);
+}
+
+/// The 'breakat' option is changed.
+const char *did_set_breakat(optset_T *args FUNC_ATTR_UNUSED)
+{
+  for (int i = 0; i < 256; i++) {
+    breakat_flags[i] = false;
+  }
+
+  if (p_breakat != NULL) {
+    for (char *p = p_breakat; *p; p++) {
+      breakat_flags[(uint8_t)(*p)] = true;
+    }
+  }
+
+  return NULL;
 }
 
 /// The 'breakindentopt' option is changed.
@@ -876,18 +898,17 @@ int expand_set_casemap(optexpand_T *args, int *numMatches, char ***matches)
 }
 
 /// The global 'listchars' or 'fillchars' option is changed.
-static const char *did_set_global_listfillchars(win_T *win, char *val, bool opt_lcs, int opt_flags)
+static const char *did_set_global_chars_option(win_T *win, char *val, CharsOption what,
+                                               int opt_flags, char *errbuf, size_t errbuflen)
 {
   const char *errmsg = NULL;
-  char **local_ptr = opt_lcs ? &win->w_p_lcs : &win->w_p_fcs;
+  char **local_ptr = (what == kListchars) ? &win->w_p_lcs : &win->w_p_fcs;
 
   // only apply the global value to "win" when it does not have a
   // local value
-  if (opt_lcs) {
-    errmsg = set_listchars_option(win, val, **local_ptr == NUL || !(opt_flags & OPT_GLOBAL));
-  } else {
-    errmsg = set_fillchars_option(win, val, **local_ptr == NUL || !(opt_flags & OPT_GLOBAL));
-  }
+  errmsg = set_chars_option(win, val, what,
+                            **local_ptr == NUL || !(opt_flags & OPT_GLOBAL),
+                            errbuf, errbuflen);
   if (errmsg != NULL) {
     return errmsg;
   }
@@ -903,14 +924,9 @@ static const char *did_set_global_listfillchars(win_T *win, char *val, bool opt_
     // again, it was changed when setting the global value.
     // If no error was returned above, we don't expect an error
     // here, so ignore the return value.
-    if (opt_lcs) {
-      if (*wp->w_p_lcs == NUL) {
-        (void)set_listchars_option(wp, wp->w_p_lcs, true);
-      }
-    } else {
-      if (*wp->w_p_fcs == NUL) {
-        (void)set_fillchars_option(wp, wp->w_p_fcs, true);
-      }
+    char *opt = (what == kListchars) ? wp->w_p_lcs : wp->w_p_fcs;
+    if (*opt == NUL) {
+      set_chars_option(wp, opt, what, true, errbuf, errbuflen);
     }
   }
 
@@ -926,13 +942,18 @@ const char *did_set_chars_option(optset_T *args)
   char **varp = (char **)args->os_varp;
   const char *errmsg = NULL;
 
-  if (varp == &p_lcs      // global 'listchars'
-      || varp == &p_fcs) {  // global 'fillchars'
-    errmsg = did_set_global_listfillchars(win, *varp, varp == &p_lcs, args->os_flags);
+  if (varp == &p_lcs) {      // global 'listchars'
+    errmsg = did_set_global_chars_option(win, *varp, kListchars, args->os_flags,
+                                         args->os_errbuf, args->os_errbuflen);
+  } else if (varp == &p_fcs) {  // global 'fillchars'
+    errmsg = did_set_global_chars_option(win, *varp, kFillchars, args->os_flags,
+                                         args->os_errbuf, args->os_errbuflen);
   } else if (varp == &win->w_p_lcs) {  // local 'listchars'
-    errmsg = set_listchars_option(win, *varp, true);
+    errmsg = set_chars_option(win, *varp, kListchars, true,
+                              args->os_errbuf, args->os_errbuflen);
   } else if (varp == &win->w_p_fcs) {  // local 'fillchars'
-    errmsg = set_fillchars_option(win, *varp, true);
+    errmsg = set_chars_option(win, *varp, kFillchars, true,
+                              args->os_errbuf, args->os_errbuflen);
   }
 
   return errmsg;
@@ -1220,7 +1241,7 @@ const char *did_set_display(optset_T *args FUNC_ATTR_UNUSED)
   if (opt_strings_flags(p_dy, p_dy_values, &dy_flags, true) != OK) {
     return e_invarg;
   }
-  (void)init_chartab();
+  init_chartab();
   msg_grid_validate();
   return NULL;
 }
@@ -1425,7 +1446,7 @@ int expand_set_foldcolumn(optexpand_T *args, int *numMatches, char ***matches)
 const char *did_set_foldexpr(optset_T *args)
 {
   win_T *win = (win_T *)args->os_win;
-  (void)did_set_optexpr(args);
+  did_set_optexpr(args);
   if (foldmethodIsExpr(win)) {
     foldUpdateAll(win);
   }
@@ -1520,7 +1541,15 @@ int expand_set_formatoptions(optexpand_T *args, int *numMatches, char ***matches
 /// The 'guicursor' option is changed.
 const char *did_set_guicursor(optset_T *args FUNC_ATTR_UNUSED)
 {
-  return parse_shape_opt(SHAPE_CURSOR);
+  const char *errmsg = parse_shape_opt(SHAPE_CURSOR);
+  if (errmsg != NULL) {
+    return errmsg;
+  }
+  if (VIsual_active) {
+    // In Visual mode cursor may be drawn differently.
+    redrawWinline(curwin, curwin->w_cursor.lnum);
+  }
+  return NULL;
 }
 
 /// The 'helpfile' option is changed.
@@ -1937,6 +1966,10 @@ const char *did_set_selection(optset_T *args FUNC_ATTR_UNUSED)
   if (*p_sel == NUL || check_opt_strings(p_sel, p_sel_values, false) != OK) {
     return e_invarg;
   }
+  if (VIsual_active) {
+    // Visual selection may be drawn differently.
+    redraw_curbuf_later(UPD_INVERTED);
+  }
   return NULL;
 }
 
@@ -1973,7 +2006,7 @@ const char *did_set_sessionoptions(optset_T *args)
   if ((ssop_flags & SSOP_CURDIR) && (ssop_flags & SSOP_SESDIR)) {
     // Don't allow both "sesdir" and "curdir".
     const char *oldval = args->os_oldval.string.data;
-    (void)opt_strings_flags(oldval, p_ssop_values, &ssop_flags, true);
+    opt_strings_flags(oldval, p_ssop_values, &ssop_flags, true);
     return e_invarg;
   }
   return NULL;
@@ -2603,7 +2636,7 @@ static const char e_conflicts_with_value_of_fillchars[]
 /// Calls mb_cptr2char_adv(p) and returns the character.
 /// If "p" starts with "\x", "\u" or "\U" the hex or unicode value is used.
 /// Returns 0 for invalid hex or invalid UTF-8 byte.
-static int get_encoded_char_adv(const char **p)
+static schar_T get_encoded_char_adv(const char **p)
 {
   const char *s = *p;
 
@@ -2618,71 +2651,82 @@ static int get_encoded_char_adv(const char **p)
       num = num * 256 + n;
     }
     *p += 2;
-    return (int)num;
+    return (char2cells((int)num) > 1) ? 0 : schar_from_char((int)num);
   }
 
-  // TODO(bfredl): use schar_T representation and utfc_ptr2len
-  int clen = utf_ptr2len(s);
-  int c = mb_cptr2char_adv(p);
-  if (clen == 1 && c > 127) {  // Invalid UTF-8 byte
-    return 0;
-  }
-  return c;
+  int clen = utfc_ptr2len(s);
+  int firstc;
+  schar_T c = utfc_ptr2schar(s, &firstc);
+  *p += clen;
+  // Invalid UTF-8 byte or doublewidth not allowed
+  return ((clen == 1 && firstc > 127) || char2cells(firstc) > 1) ? 0 : c;
 }
 
 struct chars_tab {
-  int *cp;           ///< char value
+  schar_T *cp;       ///< char value
   const char *name;  ///< char id
-  int def;           ///< default value
-  int fallback;      ///< default value when "def" isn't single-width
+  const char *def;   ///< default value
+  const char *fallback;      ///< default value when "def" isn't single-width
 };
 
 static fcs_chars_T fcs_chars;
 static const struct chars_tab fcs_tab[] = {
-  { &fcs_chars.stl,        "stl",       ' ',    NUL },
-  { &fcs_chars.stlnc,      "stlnc",     ' ',    NUL },
-  { &fcs_chars.wbr,        "wbr",       ' ',    NUL },
-  { &fcs_chars.horiz,      "horiz",     0x2500, '-' },  // ─
-  { &fcs_chars.horizup,    "horizup",   0x2534, '-' },  // ┴
-  { &fcs_chars.horizdown,  "horizdown", 0x252c, '-' },  // ┬
-  { &fcs_chars.vert,       "vert",      0x2502, '|' },  // │
-  { &fcs_chars.vertleft,   "vertleft",  0x2524, '|' },  // ┤
-  { &fcs_chars.vertright,  "vertright", 0x251c, '|' },  // ├
-  { &fcs_chars.verthoriz,  "verthoriz", 0x253c, '+' },  // ┼
-  { &fcs_chars.fold,       "fold",      0x00b7, '-' },  // ·
-  { &fcs_chars.foldopen,   "foldopen",  '-',    NUL },
-  { &fcs_chars.foldclosed, "foldclose", '+',    NUL },
-  { &fcs_chars.foldsep,    "foldsep",   0x2502, '|' },  // │
-  { &fcs_chars.diff,       "diff",      '-',    NUL },
-  { &fcs_chars.msgsep,     "msgsep",    ' ',    NUL },
-  { &fcs_chars.eob,        "eob",       '~',    NUL },
-  { &fcs_chars.lastline,   "lastline",  '@',    NUL },
+  { &fcs_chars.stl,        "stl",       " ", NULL },
+  { &fcs_chars.stlnc,      "stlnc",     " ", NULL },
+  { &fcs_chars.wbr,        "wbr",       " ", NULL },
+  { &fcs_chars.horiz,      "horiz",     "─", "-" },
+  { &fcs_chars.horizup,    "horizup",   "┴", "-" },
+  { &fcs_chars.horizdown,  "horizdown", "┬", "-" },
+  { &fcs_chars.vert,       "vert",      "│", "|" },
+  { &fcs_chars.vertleft,   "vertleft",  "┤", "|" },
+  { &fcs_chars.vertright,  "vertright", "├", "|" },
+  { &fcs_chars.verthoriz,  "verthoriz", "┼", "+" },
+  { &fcs_chars.fold,       "fold",      "·", "-" },
+  { &fcs_chars.foldopen,   "foldopen",  "-", NULL },
+  { &fcs_chars.foldclosed, "foldclose", "+", NULL },
+  { &fcs_chars.foldsep,    "foldsep",   "│", "|" },
+  { &fcs_chars.diff,       "diff",      "-", NULL },
+  { &fcs_chars.msgsep,     "msgsep",    " ", NULL },
+  { &fcs_chars.eob,        "eob",       "~", NULL },
+  { &fcs_chars.lastline,   "lastline",  "@", NULL },
 };
 
 static lcs_chars_T lcs_chars;
 static const struct chars_tab lcs_tab[] = {
-  { &lcs_chars.eol,     "eol",            NUL, NUL },
-  { &lcs_chars.ext,     "extends",        NUL, NUL },
-  { &lcs_chars.nbsp,    "nbsp",           NUL, NUL },
-  { &lcs_chars.prec,    "precedes",       NUL, NUL },
-  { &lcs_chars.space,   "space",          NUL, NUL },
-  { &lcs_chars.tab2,    "tab",            NUL, NUL },
-  { &lcs_chars.lead,    "lead",           NUL, NUL },
-  { &lcs_chars.trail,   "trail",          NUL, NUL },
-  { &lcs_chars.conceal, "conceal",        NUL, NUL },
-  { NULL,               "multispace",     NUL, NUL },
-  { NULL,               "leadmultispace", NUL, NUL },
+  { &lcs_chars.eol,     "eol",            NULL, NULL },
+  { &lcs_chars.ext,     "extends",        NULL, NULL },
+  { &lcs_chars.nbsp,    "nbsp",           NULL, NULL },
+  { &lcs_chars.prec,    "precedes",       NULL, NULL },
+  { &lcs_chars.space,   "space",          NULL, NULL },
+  { &lcs_chars.tab2,    "tab",            NULL, NULL },
+  { &lcs_chars.lead,    "lead",           NULL, NULL },
+  { &lcs_chars.trail,   "trail",          NULL, NULL },
+  { &lcs_chars.conceal, "conceal",        NULL, NULL },
+  { NULL,               "multispace",     NULL, NULL },
+  { NULL,               "leadmultispace", NULL, NULL },
 };
+
+static char *field_value_err(char *errbuf, size_t errbuflen, const char *fmt, const char *field)
+{
+  if (errbuf == NULL) {
+    return "";
+  }
+  vim_snprintf(errbuf, errbuflen, _(fmt), field);
+  return errbuf;
+}
 
 /// Handle setting 'listchars' or 'fillchars'.
 /// Assume monocell characters
 ///
-/// @param value  points to either the global or the window-local value.
-/// @param is_listchars  is true for "listchars" and false for "fillchars".
-/// @param apply  if false, do not store the flags, only check for errors.
+/// @param value      points to either the global or the window-local value.
+/// @param what       kListchars or kFillchars
+/// @param apply      if false, do not store the flags, only check for errors.
+/// @param errbuf     buffer for error message, can be NULL if it won't be used.
+/// @param errbuflen  size of error buffer.
+///
 /// @return error message, NULL if it's OK.
-static const char *set_chars_option(win_T *wp, const char *value, const bool is_listchars,
-                                    const bool apply)
+const char *set_chars_option(win_T *wp, const char *value, CharsOption what, bool apply,
+                             char *errbuf, size_t errbuflen)
 {
   const char *last_multispace = NULL;   // Last occurrence of "multispace:"
   const char *last_lmultispace = NULL;  // Last occurrence of "leadmultispace:"
@@ -2691,7 +2735,7 @@ static const char *set_chars_option(win_T *wp, const char *value, const bool is_
 
   const struct chars_tab *tab;
   int entries;
-  if (is_listchars) {
+  if (what == kListchars) {
     tab = lcs_tab;
     entries = ARRAY_SIZE(lcs_tab);
     if (wp->w_p_lcs[0] == NUL) {
@@ -2713,23 +2757,24 @@ static const char *set_chars_option(win_T *wp, const char *value, const bool is_
         if (tab[i].cp != NULL) {
           // XXX: Characters taking 2 columns is forbidden (TUI limitation?).
           // Set old defaults in this case.
-          *(tab[i].cp) = char2cells(tab[i].def) == 1 ? tab[i].def : tab[i].fallback;
+          *(tab[i].cp) = schar_from_str((tab[i].def && ptr2cells(tab[i].def) == 1)
+                                        ? tab[i].def : tab[i].fallback);
         }
       }
 
-      if (is_listchars) {
+      if (what == kListchars) {
         lcs_chars.tab1 = NUL;
         lcs_chars.tab3 = NUL;
 
         if (multispace_len > 0) {
-          lcs_chars.multispace = xmalloc(((size_t)multispace_len + 1) * sizeof(int));
+          lcs_chars.multispace = xmalloc(((size_t)multispace_len + 1) * sizeof(schar_T));
           lcs_chars.multispace[multispace_len] = NUL;
         } else {
           lcs_chars.multispace = NULL;
         }
 
         if (lead_multispace_len > 0) {
-          lcs_chars.leadmultispace = xmalloc(((size_t)lead_multispace_len + 1) * sizeof(int));
+          lcs_chars.leadmultispace = xmalloc(((size_t)lead_multispace_len + 1) * sizeof(schar_T));
           lcs_chars.leadmultispace[lead_multispace_len] = NUL;
         } else {
           lcs_chars.leadmultispace = NULL;
@@ -2742,34 +2787,36 @@ static const char *set_chars_option(win_T *wp, const char *value, const bool is_
       int i;
       for (i = 0; i < entries; i++) {
         const size_t len = strlen(tab[i].name);
-        if (!(strncmp(p, tab[i].name, len) == 0
-              && p[len] == ':'
-              && p[len + 1] != NUL)) {
+        if (!(strncmp(p, tab[i].name, len) == 0 && p[len] == ':')) {
           continue;
         }
 
-        if (is_listchars && strcmp(tab[i].name, "multispace") == 0) {
+        if (what == kListchars && strcmp(tab[i].name, "multispace") == 0) {
           const char *s = p + len + 1;
           if (round == 0) {
             // Get length of lcs-multispace string in the first round
             last_multispace = p;
             multispace_len = 0;
             while (*s != NUL && *s != ',') {
-              int c1 = get_encoded_char_adv(&s);
-              if (c1 == 0 || char2cells(c1) > 1) {
-                return e_invarg;
+              schar_T c1 = get_encoded_char_adv(&s);
+              if (c1 == 0) {
+                return field_value_err(errbuf, errbuflen,
+                                       e_wrong_character_width_for_field_str,
+                                       tab[i].name);
               }
               multispace_len++;
             }
             if (multispace_len == 0) {
               // lcs-multispace cannot be an empty string
-              return e_invarg;
+              return field_value_err(errbuf, errbuflen,
+                                     e_wrong_number_of_characters_for_field_str,
+                                     tab[i].name);
             }
             p = s;
           } else {
             int multispace_pos = 0;
             while (*s != NUL && *s != ',') {
-              int c1 = get_encoded_char_adv(&s);
+              schar_T c1 = get_encoded_char_adv(&s);
               if (p == last_multispace) {
                 lcs_chars.multispace[multispace_pos++] = c1;
               }
@@ -2779,28 +2826,32 @@ static const char *set_chars_option(win_T *wp, const char *value, const bool is_
           break;
         }
 
-        if (is_listchars && strcmp(tab[i].name, "leadmultispace") == 0) {
+        if (what == kListchars && strcmp(tab[i].name, "leadmultispace") == 0) {
           const char *s = p + len + 1;
           if (round == 0) {
             // get length of lcs-leadmultispace string in first round
             last_lmultispace = p;
             lead_multispace_len = 0;
             while (*s != NUL && *s != ',') {
-              int c1 = get_encoded_char_adv(&s);
-              if (c1 == 0 || char2cells(c1) > 1) {
-                return e_invarg;
+              schar_T c1 = get_encoded_char_adv(&s);
+              if (c1 == 0) {
+                return field_value_err(errbuf, errbuflen,
+                                       e_wrong_character_width_for_field_str,
+                                       tab[i].name);
               }
               lead_multispace_len++;
             }
             if (lead_multispace_len == 0) {
               // lcs-leadmultispace cannot be an empty string
-              return e_invarg;
+              return field_value_err(errbuf, errbuflen,
+                                     e_wrong_number_of_characters_for_field_str,
+                                     tab[i].name);
             }
             p = s;
           } else {
             int multispace_pos = 0;
             while (*s != NUL && *s != ',') {
-              int c1 = get_encoded_char_adv(&s);
+              schar_T c1 = get_encoded_char_adv(&s);
               if (p == last_lmultispace) {
                 lcs_chars.leadmultispace[multispace_pos++] = c1;
               }
@@ -2811,24 +2862,37 @@ static const char *set_chars_option(win_T *wp, const char *value, const bool is_
         }
 
         const char *s = p + len + 1;
-        int c1 = get_encoded_char_adv(&s);
-        if (c1 == 0 || char2cells(c1) > 1) {
-          return e_invarg;
+        if (*s == NUL) {
+          return field_value_err(errbuf, errbuflen,
+                                 e_wrong_number_of_characters_for_field_str,
+                                 tab[i].name);
         }
-        int c2 = 0;
-        int c3 = 0;
+        schar_T c1 = get_encoded_char_adv(&s);
+        if (c1 == 0) {
+          return field_value_err(errbuf, errbuflen,
+                                 e_wrong_character_width_for_field_str,
+                                 tab[i].name);
+        }
+        schar_T c2 = 0;
+        schar_T c3 = 0;
         if (tab[i].cp == &lcs_chars.tab2) {
           if (*s == NUL) {
-            return e_invarg;
+            return field_value_err(errbuf, errbuflen,
+                                   e_wrong_number_of_characters_for_field_str,
+                                   tab[i].name);
           }
           c2 = get_encoded_char_adv(&s);
-          if (c2 == 0 || char2cells(c2) > 1) {
-            return e_invarg;
+          if (c2 == 0) {
+            return field_value_err(errbuf, errbuflen,
+                                   e_wrong_character_width_for_field_str,
+                                   tab[i].name);
           }
           if (!(*s == ',' || *s == NUL)) {
             c3 = get_encoded_char_adv(&s);
-            if (c3 == 0 || char2cells(c3) > 1) {
-              return e_invarg;
+            if (c3 == 0) {
+              return field_value_err(errbuf, errbuflen,
+                                     e_wrong_character_width_for_field_str,
+                                     tab[i].name);
             }
           }
         }
@@ -2845,6 +2909,10 @@ static const char *set_chars_option(win_T *wp, const char *value, const bool is_
           }
           p = s;
           break;
+        } else {
+          return field_value_err(errbuf, errbuflen,
+                                 e_wrong_number_of_characters_for_field_str,
+                                 tab[i].name);
         }
       }
 
@@ -2859,7 +2927,7 @@ static const char *set_chars_option(win_T *wp, const char *value, const bool is_
   }
 
   if (apply) {
-    if (is_listchars) {
+    if (what == kListchars) {
       xfree(wp->w_p_lcs_chars.multispace);
       xfree(wp->w_p_lcs_chars.leadmultispace);
       wp->w_p_lcs_chars = lcs_chars;
@@ -2869,18 +2937,6 @@ static const char *set_chars_option(win_T *wp, const char *value, const bool is_
   }
 
   return NULL;          // no error
-}
-
-/// Handle the new value of 'fillchars'.
-const char *set_fillchars_option(win_T *wp, char *val, bool apply)
-{
-  return set_chars_option(wp, val, false, apply);
-}
-
-/// Handle the new value of 'listchars'.
-const char *set_listchars_option(win_T *wp, char *val, bool apply)
-{
-  return set_chars_option(wp, val, true, apply);
 }
 
 /// Function given to ExpandGeneric() to obtain possible arguments of the
@@ -2911,17 +2967,17 @@ char *get_listchars_name(expand_T *xp FUNC_ATTR_UNUSED, int idx)
 /// @return  an untranslated error message if any of them is invalid, NULL otherwise.
 const char *check_chars_options(void)
 {
-  if (set_listchars_option(curwin, p_lcs, false) != NULL) {
+  if (set_chars_option(curwin, p_lcs, kListchars, false, NULL, 0) != NULL) {
     return e_conflicts_with_value_of_listchars;
   }
-  if (set_fillchars_option(curwin, p_fcs, false) != NULL) {
+  if (set_chars_option(curwin, p_fcs, kFillchars, false, NULL, 0) != NULL) {
     return e_conflicts_with_value_of_fillchars;
   }
   FOR_ALL_TAB_WINDOWS(tp, wp) {
-    if (set_listchars_option(wp, wp->w_p_lcs, true) != NULL) {
+    if (set_chars_option(wp, wp->w_p_lcs, kListchars, true, NULL, 0) != NULL) {
       return e_conflicts_with_value_of_listchars;
     }
-    if (set_fillchars_option(wp, wp->w_p_fcs, true) != NULL) {
+    if (set_chars_option(wp, wp->w_p_fcs, kFillchars, true, NULL, 0) != NULL) {
       return e_conflicts_with_value_of_fillchars;
     }
   }

@@ -12,6 +12,7 @@ for s in (package.cpath .. ';'):gmatch('[^;]*;') do
   end
 end
 
+--- @param name string
 function vim._load_package(name)
   local basename = name:gsub('%.', '/')
   local paths = { 'lua/' .. basename .. '.lua', 'lua/' .. basename .. '/init.lua' }
@@ -55,9 +56,11 @@ vim._submodules = {
   inspect = true,
   version = true,
   fs = true,
+  glob = true,
   iter = true,
   re = true,
   text = true,
+  provider = true,
 }
 
 -- These are for loading runtime modules in the vim namespace lazily.
@@ -83,6 +86,7 @@ setmetatable(vim, {
 --- <Docs described in |vim.empty_dict()| >
 ---@private
 --- TODO: should be in vim.shared when vim.shared always uses nvim-lua
+--- @diagnostic disable-next-line:duplicate-set-field
 function vim.empty_dict()
   return setmetatable({}, vim._empty_dict_mt)
 end

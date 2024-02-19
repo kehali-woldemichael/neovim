@@ -81,10 +81,10 @@
 --- @class vim.fn.sign_getplaced.dict
 --- @field group? string
 --- @field id? integer
---- @field lnum? string
+--- @field lnum? string|integer
 
 --- @class vim.fn.sign_getplaced.ret.item
---- @field buf integer
+--- @field bufnr integer
 --- @field signs vim.fn.sign[]
 
 --- @class vim.fn.sign_place.dict
@@ -118,7 +118,7 @@
 --- @field topfill? integer
 --- @field topline? integer
 
---- @class vim.fn.winsaveview.ret
+--- @class vim.fn.winsaveview.ret: vim.fn.winrestview.dict
 --- @field col integer
 --- @field coladd integer
 --- @field curswant integer

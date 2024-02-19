@@ -5,6 +5,7 @@
 
 #include "nvim/ascii_defs.h"
 #include "nvim/autocmd.h"
+#include "nvim/autocmd_defs.h"
 #include "nvim/buffer.h"
 #include "nvim/buffer_defs.h"
 #include "nvim/change.h"
@@ -493,6 +494,7 @@ static dict_T *get_buffer_info(buf_T *buf)
   tv_dict_add_nr(dict, S_LEN("changed"), bufIsChanged(buf));
   tv_dict_add_nr(dict, S_LEN("changedtick"), buf_get_changedtick(buf));
   tv_dict_add_nr(dict, S_LEN("hidden"), buf->b_ml.ml_mfp != NULL && buf->b_nwindows == 0);
+  tv_dict_add_nr(dict, S_LEN("command"), buf == cmdwin_buf);
 
   // Get a reference to buffer variables
   tv_dict_add_dict(dict, S_LEN("variables"), buf->b_vars);
@@ -506,7 +508,7 @@ static dict_T *get_buffer_info(buf_T *buf)
   }
   tv_dict_add_list(dict, S_LEN("windows"), windows);
 
-  if (buf->b_signs) {
+  if (buf_has_signs(buf)) {
     // List of signs placed in this buffer
     tv_dict_add_list(dict, S_LEN("signs"), get_buffer_signs(buf));
   }
@@ -583,7 +585,8 @@ void f_getbufinfo(typval_T *argvars, typval_T *rettv, EvalFuncData fptr)
 ///
 /// @return  range (from start to end) of lines in rettv from the specified
 ///          buffer.
-static void get_buffer_lines(buf_T *buf, linenr_T start, linenr_T end, int retlist, typval_T *rettv)
+static void get_buffer_lines(buf_T *buf, linenr_T start, linenr_T end, bool retlist,
+                             typval_T *rettv)
 {
   rettv->v_type = (retlist ? VAR_LIST : VAR_STRING);
   rettv->vval.v_string = NULL;

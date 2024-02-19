@@ -11,6 +11,7 @@
 
 #include "nvim/ascii_defs.h"
 #include "nvim/autocmd.h"
+#include "nvim/autocmd_defs.h"
 #include "nvim/buffer_defs.h"
 #include "nvim/charset.h"
 #include "nvim/drawscreen.h"
@@ -18,15 +19,17 @@
 #include "nvim/eval/encode.h"
 #include "nvim/eval/funcs.h"
 #include "nvim/eval/typval.h"
+#include "nvim/eval/typval_defs.h"
 #include "nvim/eval/userfunc.h"
 #include "nvim/eval/vars.h"
 #include "nvim/eval/window.h"
+#include "nvim/eval_defs.h"
 #include "nvim/ex_cmds.h"
 #include "nvim/ex_cmds_defs.h"
 #include "nvim/ex_docmd.h"
 #include "nvim/ex_eval.h"
 #include "nvim/garray.h"
-#include "nvim/gettext.h"
+#include "nvim/gettext_defs.h"
 #include "nvim/globals.h"
 #include "nvim/hashtab.h"
 #include "nvim/macros_defs.h"
@@ -42,6 +45,8 @@
 #include "nvim/types_defs.h"
 #include "nvim/vim_defs.h"
 #include "nvim/window.h"
+
+typedef int (*ex_unletlock_callback)(lval_T *, char *, exarg_T *, int);
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "eval/vars.c.generated.h"
@@ -376,7 +381,7 @@ void ex_let(exarg_T *eap)
       if (!eap->skip) {
         op[0] = '=';
         op[1] = NUL;
-        (void)ex_let_vars(eap->arg, &rettv, false, semicolon, var_count, is_const, op);
+        ex_let_vars(eap->arg, &rettv, false, semicolon, var_count, is_const, op);
       }
       tv_clear(&rettv);
     }
@@ -413,7 +418,7 @@ void ex_let(exarg_T *eap)
   clear_evalarg(&evalarg, eap);
 
   if (!eap->skip && eval_res != FAIL) {
-    (void)ex_let_vars(eap->arg, &rettv, false, semicolon, var_count, is_const, op);
+    ex_let_vars(eap->arg, &rettv, false, semicolon, var_count, is_const, op);
   }
   if (eval_res != FAIL) {
     tv_clear(&rettv);
@@ -1301,7 +1306,7 @@ void vars_clear(hashtab_T *ht)
 }
 
 /// Like vars_clear(), but only free the value if "free_val" is true.
-void vars_clear_ext(hashtab_T *ht, int free_val)
+void vars_clear_ext(hashtab_T *ht, bool free_val)
 {
   int todo;
   hashitem_T *hi;
@@ -1963,7 +1968,7 @@ static void set_option_from_tv(const char *varname, typval_T *varp)
 }
 
 /// "setwinvar()" and "settabwinvar()" functions
-static void setwinvar(typval_T *argvars, typval_T *rettv, int off)
+static void setwinvar(typval_T *argvars, int off)
 {
   if (check_secure()) {
     return;
@@ -2072,8 +2077,6 @@ void f_getbufvar(typval_T *argvars, typval_T *rettv, EvalFuncData fptr)
 /// "settabvar()" function
 void f_settabvar(typval_T *argvars, typval_T *rettv, EvalFuncData fptr)
 {
-  rettv->vval.v_number = 0;
-
   if (check_secure()) {
     return;
   }
@@ -2087,6 +2090,7 @@ void f_settabvar(typval_T *argvars, typval_T *rettv, EvalFuncData fptr)
   }
 
   tabpage_T *const save_curtab = curtab;
+  tabpage_T *const save_lu_tp = lastused_tabpage;
   goto_tabpage_tp(tp, false, false);
 
   const size_t varname_len = strlen(varname);
@@ -2096,22 +2100,25 @@ void f_settabvar(typval_T *argvars, typval_T *rettv, EvalFuncData fptr)
   set_var(tabvarname, varname_len + 2, varp, true);
   xfree(tabvarname);
 
-  // Restore current tabpage.
+  // Restore current tabpage and last accessed tabpage.
   if (valid_tabpage(save_curtab)) {
     goto_tabpage_tp(save_curtab, false, false);
+    if (valid_tabpage(save_lu_tp)) {
+      lastused_tabpage = save_lu_tp;
+    }
   }
 }
 
 /// "settabwinvar()" function
 void f_settabwinvar(typval_T *argvars, typval_T *rettv, EvalFuncData fptr)
 {
-  setwinvar(argvars, rettv, 1);
+  setwinvar(argvars, 1);
 }
 
 /// "setwinvar()" function
 void f_setwinvar(typval_T *argvars, typval_T *rettv, EvalFuncData fptr)
 {
-  setwinvar(argvars, rettv, 0);
+  setwinvar(argvars, 0);
 }
 
 /// "setbufvar()" function

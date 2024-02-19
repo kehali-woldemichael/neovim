@@ -28,11 +28,12 @@ typedef struct {
   Integer end_line;
   Integer end_row;
   Integer end_col;
-  Object hl_group;
+  HLGroupID hl_group;
   Array virt_text;
   String virt_text_pos;
   Integer virt_text_win_col;
   Boolean virt_text_hide;
+  Boolean virt_text_repeat_linebreak;
   Boolean hl_eol;
   String hl_mode;
   Boolean invalidate;
@@ -45,14 +46,17 @@ typedef struct {
   Boolean virt_lines_leftcol;
   Boolean strict;
   String sign_text;
-  Object sign_hl_group;
-  Object number_hl_group;
-  Object line_hl_group;
-  Object cursorline_hl_group;
+  HLGroupID sign_hl_group;
+  HLGroupID number_hl_group;
+  HLGroupID line_hl_group;
+  HLGroupID cursorline_hl_group;
   String conceal;
   Boolean spell;
   Boolean ui_watched;
   Boolean undo_restore;
+  String url;
+
+  Integer _subpriority;
 } Dict(set_extmark);
 
 typedef struct {
@@ -104,17 +108,19 @@ typedef struct {
 } Dict(user_command);
 
 typedef struct {
-  OptionalKeys is_set__float_config_;
+  OptionalKeys is_set__win_config_;
   Float row;
   Float col;
   Integer width;
   Integer height;
   String anchor;
   String relative;
+  String split;
   Window win;
   Array bufpos;
   Boolean external;
   Boolean focusable;
+  Boolean vertical;
   Integer zindex;
   Object border;
   Object title;
@@ -125,7 +131,7 @@ typedef struct {
   Boolean noautocmd;
   Boolean fixed;
   Boolean hide;
-} Dict(float_config);
+} Dict(win_config);
 
 typedef struct {
   Boolean is_lua;
@@ -182,6 +188,7 @@ typedef struct {
   Boolean fg_indexed;
   Boolean bg_indexed;
   Boolean force;
+  String url;
 } Dict(highlight);
 
 typedef struct {
@@ -351,3 +358,19 @@ typedef struct {
   OptionalKeys is_set__complete_set_;
   String info;
 } Dict(complete_set);
+
+typedef struct {
+  OptionalKeys is_set__xdl_diff_;
+  LuaRef on_hunk;
+  String result_type;
+  String algorithm;
+  Integer ctxlen;
+  Integer interhunkctxlen;
+  Object linematch;
+  Boolean ignore_whitespace;
+  Boolean ignore_whitespace_change;
+  Boolean ignore_whitespace_change_at_eol;
+  Boolean ignore_cr_at_eol;
+  Boolean ignore_blank_lines;
+  Boolean indent_heuristic;
+} Dict(xdl_diff);

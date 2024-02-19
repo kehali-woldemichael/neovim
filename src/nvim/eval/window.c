@@ -15,10 +15,11 @@
 #include "nvim/eval/typval_defs.h"
 #include "nvim/eval/window.h"
 #include "nvim/garray.h"
-#include "nvim/gettext.h"
+#include "nvim/garray_defs.h"
+#include "nvim/gettext_defs.h"
 #include "nvim/globals.h"
 #include "nvim/macros_defs.h"
-#include "nvim/mark.h"
+#include "nvim/mark_defs.h"
 #include "nvim/memory.h"
 #include "nvim/message.h"
 #include "nvim/move.h"
@@ -485,7 +486,7 @@ void f_tabpagewinnr(typval_T *argvars, typval_T *rettv, EvalFuncData fptr)
 /// Switch to a window for executing user code.
 /// Caller must call win_execute_after() later regardless of return value.
 ///
-/// @return  whether switching the window succeded.
+/// @return  whether switching the window succeeded.
 bool win_execute_before(win_execute_T *args, win_T *wp, tabpage_T *tp)
 {
   args->wp = wp;
@@ -675,13 +676,13 @@ static void win_move_into_split(win_T *wp, win_T *targetwin, int size, int flags
 
   // Remove the old window and frame from the tree of frames
   int dir;
-  (void)winframe_remove(wp, &dir, NULL);
+  winframe_remove(wp, &dir, NULL);
   win_remove(wp, NULL);
   last_status(false);     // may need to remove last status line
-  (void)win_comp_pos();   // recompute window positions
+  win_comp_pos();   // recompute window positions
 
   // Split a window on the desired side and put the old window there
-  (void)win_split_ins(size, flags, wp, dir);
+  win_split_ins(size, flags, wp, dir);
 
   // If splitting horizontally, try to preserve height
   if (size == 0 && !(flags & WSP_VERT)) {
@@ -754,7 +755,7 @@ void f_win_gettype(typval_T *argvars, typval_T *rettv, EvalFuncData fptr)
     rettv->vval.v_string = xstrdup("preview");
   } else if (wp->w_floating) {
     rettv->vval.v_string = xstrdup("popup");
-  } else if (wp == curwin && cmdwin_type != 0) {
+  } else if (wp == cmdwin_win) {
     rettv->vval.v_string = xstrdup("command");
   } else if (bt_quickfix(wp->w_buffer)) {
     rettv->vval.v_string = xstrdup((wp->w_llist_ref != NULL ? "loclist" : "quickfix"));

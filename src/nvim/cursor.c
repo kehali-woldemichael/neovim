@@ -13,6 +13,7 @@
 #include "nvim/globals.h"
 #include "nvim/mark.h"
 #include "nvim/mbyte.h"
+#include "nvim/mbyte_defs.h"
 #include "nvim/memline.h"
 #include "nvim/memory.h"
 #include "nvim/move.h"
@@ -21,6 +22,7 @@
 #include "nvim/plines.h"
 #include "nvim/pos_defs.h"
 #include "nvim/state.h"
+#include "nvim/state_defs.h"
 #include "nvim/types_defs.h"
 #include "nvim/vim_defs.h"
 
@@ -140,17 +142,18 @@ static int coladvance2(pos_T *pos, bool addspaces, bool finetune, colnr_T wcol_a
       }
     }
 
-    chartabsize_T cts;
-    init_chartabsize_arg(&cts, curwin, pos->lnum, 0, line, line);
-    while (cts.cts_vcol <= wcol && *cts.cts_ptr != NUL) {
-      // Count a tab for what it's worth (if list mode not on)
-      csize = win_lbr_chartabsize(&cts, &head);
-      MB_PTR_ADV(cts.cts_ptr);
-      cts.cts_vcol += csize;
+    CharsizeArg csarg;
+    CSType cstype = init_charsize_arg(&csarg, curwin, pos->lnum, line);
+    StrCharInfo ci = utf_ptr2StrCharInfo(line);
+    col = 0;
+    while (col <= wcol && *ci.ptr != NUL) {
+      CharSize cs = win_charsize(cstype, col, ci.ptr, ci.chr.value, &csarg);
+      csize = cs.width;
+      head = cs.head;
+      col += cs.width;
+      ci = utfc_next(ci);
     }
-    col = cts.cts_vcol;
-    idx = (int)(cts.cts_ptr - line);
-    clear_chartabsize_arg(&cts);
+    idx = (int)(ci.ptr - line);
 
     // Handle all the special cases.  The virtual_active() check
     // is needed to ensure that a virtual position off the end of
@@ -291,7 +294,7 @@ linenr_T get_cursor_rel_lnum(win_T *wp, linenr_T lnum)
   // Loop until we reach to_line, skipping folds.
   for (; from_line < to_line; from_line++, retval++) {
     // If from_line is in a fold, set it to the last line of that fold.
-    (void)hasFoldingWin(wp, from_line, NULL, &from_line, true, NULL);
+    hasFoldingWin(wp, from_line, NULL, &from_line, true, NULL);
   }
 
   // If to_line is in a closed fold, the line count is off by +1. Correct it.

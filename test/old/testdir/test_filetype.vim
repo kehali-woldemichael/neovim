@@ -140,6 +140,7 @@ func s:GetFilenameChecks() abort
     \ 'chatito': ['file.chatito'],
     \ 'chill': ['file..ch'],
     \ 'chordpro': ['file.chopro', 'file.crd', 'file.cho', 'file.crdpro', 'file.chordpro'],
+    \ 'chuck': ['file.ck'],
     \ 'cl': ['file.eni'],
     \ 'clean': ['file.dcl', 'file.icl'],
     \ 'clojure': ['file.clj', 'file.cljs', 'file.cljx', 'file.cljc'],
@@ -203,7 +204,7 @@ func s:GetFilenameChecks() abort
     \ 'dracula': ['file.drac', 'file.drc', 'filelvs', 'filelpe', 'drac.file', 'lpe', 'lvs', 'some-lpe', 'some-lvs'],
     \ 'dtd': ['file.dtd'],
     \ 'dtrace': ['/usr/lib/dtrace/io.d'],
-    \ 'dts': ['file.dts', 'file.dtsi'],
+    \ 'dts': ['file.dts', 'file.dtsi', 'file.dtso', 'file.its'],
     \ 'dune': ['jbuild', 'dune', 'dune-project', 'dune-workspace'],
     \ 'dylan': ['file.dylan'],
     \ 'dylanintr': ['file.intr'],
@@ -340,13 +341,13 @@ func s:GetFilenameChecks() abort
     \ 'jproperties': ['file.properties', 'file.properties_xx', 'file.properties_xx_xx', 'some.properties_xx_xx_file', 'org.eclipse.xyz.prefs'],
     \ 'json': ['file.json', 'file.jsonp', 'file.json-patch', 'file.geojson', 'file.webmanifest', 'Pipfile.lock', 'file.ipynb', '.prettierrc', '.firebaserc', '.stylelintrc', 'file.slnf'],
     \ 'json5': ['file.json5'],
-    \ 'jsonc': ['file.jsonc', '.babelrc', '.eslintrc', '.jsfmtrc', '.jshintrc', '.hintrc', '.swrc', 'jsconfig.json', 'tsconfig.json', 'tsconfig.test.json', 'tsconfig-test.json'],
+    \ 'jsonc': ['file.jsonc', '.babelrc', '.eslintrc', '.jsfmtrc', '.jshintrc', '.hintrc', '.swrc', 'jsconfig.json', 'tsconfig.json', 'tsconfig.test.json', 'tsconfig-test.json', '.luaurc'],
     \ 'jsonl': ['file.jsonl'],
     \ 'jsonnet': ['file.jsonnet', 'file.libsonnet'],
     \ 'jsp': ['file.jsp'],
     \ 'julia': ['file.jl'],
     \ 'just': ['justfile', 'Justfile', '.justfile', 'config.just'],
-    \ 'kconfig': ['Kconfig', 'Kconfig.debug', 'Kconfig.file'],
+    \ 'kconfig': ['Kconfig', 'Kconfig.debug', 'Kconfig.file', 'Config.in', 'Config.in.host'],
     \ 'kdl': ['file.kdl'],
     \ 'kivy': ['file.kv'],
     \ 'kix': ['file.kix'],
@@ -424,7 +425,6 @@ func s:GetFilenameChecks() abort
     \ 'mma': ['file.nb'],
     \ 'mmp': ['file.mmp'],
     \ 'modconf': ['/etc/modules.conf', '/etc/modules', '/etc/conf.modules', '/etc/modprobe.file', 'any/etc/conf.modules', 'any/etc/modprobe.file', 'any/etc/modules', 'any/etc/modules.conf'],
-    \ 'modula2': ['file.m2', 'file.mi'],
     \ 'modula3': ['file.m3', 'file.mg', 'file.i3', 'file.ig', 'file.lm3'],
     \ 'monk': ['file.isc', 'file.monk', 'file.ssc', 'file.tsc'],
     \ 'moo': ['file.moo'],
@@ -581,7 +581,7 @@ func s:GetFilenameChecks() abort
     \ 'services': ['/etc/services', 'any/etc/services'],
     \ 'setserial': ['/etc/serial.conf', 'any/etc/serial.conf'],
     \ 'sexplib': ['file.sexp'],
-    \ 'sh': ['.bashrc', '.bash_profile', '.bash-profile', '.bash_logout', '.bash-logout', '.bash_aliases', '.bash-aliases', '/tmp/bash-fc-3Ozjlw', '/tmp/bash-fc.3Ozjlw', 'PKGBUILD', 'APKBUILD', 'file.bash', '/usr/share/doc/bash-completion/filter.sh', '/etc/udev/cdsymlinks.conf', 'any/etc/udev/cdsymlinks.conf'],
+    \ 'sh': ['.bashrc', '.bash_profile', '.bash-profile', '.bash_logout', '.bash-logout', '.bash_aliases', '.bash-aliases', '/tmp/bash-fc-3Ozjlw', '/tmp/bash-fc.3Ozjlw', 'PKGBUILD', 'APKBUILD', 'file.bash', '/usr/share/doc/bash-completion/filter.sh', '/etc/udev/cdsymlinks.conf', 'any/etc/udev/cdsymlinks.conf', 'file.bats'],
     \ 'sieve': ['file.siv', 'file.sieve'],
     \ 'sil': ['file.sil'],
     \ 'simula': ['file.sim'],
@@ -1550,13 +1550,16 @@ func Test_mod_file()
   call writefile(['IMPLEMENTATION MODULE Module2Mod;'], 'modfile.MOD')
   split modfile.MOD
   call assert_equal('modula2', &filetype)
+  call assert_equal('pim', b:modula2.dialect)
   bwipe!
 
   " Modula-2 with comment and empty lines prior MODULE
   call writefile(['', '(* with',  ' comment *)', '', 'MODULE Module2Mod;'], 'modfile.MOD')
   split modfile.MOD
   call assert_equal('modula2', &filetype)
+  call assert_equal('pim', b:modula2.dialect)
   bwipe!
+
   call delete('modfile.MOD')
 
   " LambdaProlog module
@@ -2279,6 +2282,40 @@ func Test_i_file()
   call writefile(['looks like progress'], 'Xfile.i', 'D')
   split Xfile.i
   call assert_equal('progress', &filetype)
+  bwipe!
+
+  filetype off
+endfunc
+
+func Test_def_file()
+  filetype on
+
+  call writefile(['this is the fallback'], 'Xfile.def', 'D')
+  split Xfile.def
+  call assert_equal('def', &filetype)
+  bwipe!
+
+  " Test dist#ft#FTdef()
+
+  let g:filetype_def = 'modula2'
+  split Xfile.def
+  call assert_equal('modula2', &filetype)
+  call assert_equal('pim', b:modula2.dialect)
+  bwipe!
+  unlet g:filetype_def
+
+  " Modula-2
+
+  call writefile(['(* a Modula-2 comment *)'], 'Xfile.def')
+  split Xfile.def
+  call assert_equal('modula2', &filetype)
+  call assert_equal('pim', b:modula2.dialect)
+  bwipe!
+
+  call writefile(['IMPLEMENTATION MODULE Module2Mod;'], 'Xfile.def')
+  split Xfile.def
+  call assert_equal('modula2', &filetype)
+  call assert_equal('pim', b:modula2.dialect)
   bwipe!
 
   filetype off

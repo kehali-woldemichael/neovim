@@ -1,6 +1,7 @@
 local helpers = require('test.functional.helpers')(after_each)
 local Screen = require('test.functional.ui.screen')
-local clear, feed, exec, meths = helpers.clear, helpers.feed, helpers.exec, helpers.meths
+local api, clear, eq = helpers.api, helpers.clear, helpers.eq
+local eval, exec, feed = helpers.eval, helpers.exec, helpers.feed
 
 describe('Signs', function()
   local screen
@@ -9,20 +10,20 @@ describe('Signs', function()
     clear()
     screen = Screen.new()
     screen:attach()
-    screen:set_default_attr_ids( {
-      [0] = {bold=true, foreground=255},
-      [1] = {background = Screen.colors.Yellow},
-      [2] = {foreground = Screen.colors.DarkBlue, background = Screen.colors.Grey},
-      [3] = {background = Screen.colors.Gray90},
-      [4] = {bold = true, reverse = true},
-      [5] = {reverse = true},
-      [6] = {foreground = Screen.colors.Brown},
-      [7] = {foreground = Screen.colors.DarkBlue, background = Screen.colors.LightGrey},
-      [8] = {foreground = Screen.colors.Grey100, background = Screen.colors.Red},
-      [9] = {bold = true, foreground = Screen.colors.Magenta},
-      [10] = {foreground = Screen.colors.Blue1},
-      [11] = {bold = true, foreground = Screen.colors.SeaGreen4},
-    } )
+    screen:set_default_attr_ids({
+      [0] = { bold = true, foreground = 255 },
+      [1] = { background = Screen.colors.Yellow },
+      [2] = { foreground = Screen.colors.DarkBlue, background = Screen.colors.Grey },
+      [3] = { background = Screen.colors.Gray90 },
+      [4] = { bold = true, reverse = true },
+      [5] = { reverse = true },
+      [6] = { foreground = Screen.colors.Brown },
+      [7] = { foreground = Screen.colors.DarkBlue, background = Screen.colors.LightGrey },
+      [8] = { foreground = Screen.colors.Grey100, background = Screen.colors.Red },
+      [9] = { bold = true, foreground = Screen.colors.Magenta },
+      [10] = { foreground = Screen.colors.Blue1 },
+      [11] = { bold = true, foreground = Screen.colors.SeaGreen4 },
+    })
   end)
 
   describe(':sign place', function()
@@ -415,25 +416,25 @@ describe('Signs', function()
       feed('gg100aa<Esc>')
       screen:expect([[
         {1: >> }aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
-            aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
-            aa^a                                              |
+        {8:    }aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+        {8:    }aa^a                                              |
         {8:  2 }b                                                |
         {6:  3 }c                                                |
         {6:  4 }                                                 |
         {0:~                                                    }|*7
                                                              |
       ]])
-      meths.buf_set_extmark(0, meths.create_namespace('test'), 0, 0, {
+      api.nvim_buf_set_extmark(0, api.nvim_create_namespace('test'), 0, 0, {
         virt_lines = { { { 'VIRT LINES' } } },
         virt_lines_above = true,
       })
       feed('<C-Y>')
       -- number column on virtual lines should be empty
       screen:expect([[
-            VIRT LINES                                       |
+        {6:    }VIRT LINES                                       |
         {1: >> }aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
-            aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
-            aa^a                                              |
+        {8:    }aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+        {8:    }aa^a                                              |
         {8:  2 }b                                                |
         {6:  3 }c                                                |
         {6:  4 }                                                 |
@@ -468,7 +469,7 @@ describe('Signs', function()
   end)
 
   it('signcolumn width is updated when removing all signs after deleting lines', function()
-    meths.buf_set_lines(0, 0, 1, true, {'a', 'b', 'c', 'd', 'e'})
+    api.nvim_buf_set_lines(0, 0, 1, true, { 'a', 'b', 'c', 'd', 'e' })
     exec('sign define piet text=>>')
     exec('sign place 10001 line=1 name=piet')
     exec('sign place 10002 line=5 name=piet')
@@ -494,7 +495,7 @@ describe('Signs', function()
   end)
 
   it('signcolumn width is updated when removing all signs after inserting lines', function()
-    meths.buf_set_lines(0, 0, 1, true, {'a', 'b', 'c', 'd', 'e'})
+    api.nvim_buf_set_lines(0, 0, 1, true, { 'a', 'b', 'c', 'd', 'e' })
     exec('sign define piet text=>>')
     exec('sign place 10001 line=1 name=piet')
     exec('sign place 10002 line=5 name=piet')
@@ -538,5 +539,40 @@ describe('Signs', function()
       {6:  3 }line3                                            |
                                                            |
     ]])
+  end)
+
+  it('no negative b_signcols.count with undo after initializing', function()
+    exec([[
+      set signcolumn=auto:2
+      call setline(1, 'a')
+      call nvim_buf_set_extmark(0, nvim_create_namespace(''), 0, 0, {'sign_text':'S1'})
+      delete | redraw | undo
+    ]])
+  end)
+
+  it('sign not shown on line it was previously on after undo', function()
+    exec([[
+      call setline(1, range(1, 4))
+      call nvim_buf_set_extmark(0, nvim_create_namespace(''), 1, 0, {'sign_text':'S1'})
+    ]])
+    exec('norm 2Gdd')
+    exec('silent undo')
+    screen:expect([[
+      {2:  }1                                                  |
+      S1^2                                                  |
+      {2:  }3                                                  |
+      {2:  }4                                                  |
+      {0:~                                                    }|*9
+                                                           |
+    ]])
+  end)
+
+  it('sign_undefine() frees all signs', function()
+    exec([[
+      sign define 1 text=1
+      sign define 2 text=2
+      call sign_undefine()
+    ]])
+    eq({}, eval('sign_getdefined()'))
   end)
 end)

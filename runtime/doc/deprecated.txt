@@ -90,7 +90,7 @@ For each of the functions below, use the corresponding function in
 - *vim.lsp.diagnostic.enable()*
 - *vim.lsp.diagnostic.get()*
 - *vim.lsp.diagnostic.get_all()*	Use |vim.diagnostic.get()| instead.
-- *vim.lsp.diagnostic.get_count()*	Use |vim.diagnostic.get()| instead.
+- *vim.lsp.diagnostic.get_count()*	Use |vim.diagnostic.count()| instead.
 - *vim.lsp.diagnostic.get_line_diagnostics()* Use |vim.diagnostic.get()| instead.
 - *vim.lsp.diagnostic.get_next()*
 - *vim.lsp.diagnostic.get_next_pos()*
@@ -144,6 +144,8 @@ LSP FUNCTIONS
 						`progress` of |vim.lsp.client|
 - *vim.lsp.get_active_clients()*		Use |vim.lsp.get_clients()|
 - *vim.lsp.for_each_buffer_client()*		Use |vim.lsp.get_clients()|
+- *vim.lsp.util.lookup_section()*		Use |vim.tbl_get()| and
+						|vim.split()| with {plain=true} instead.
 - *vim.lsp.util.trim_empty_lines()*		Use |vim.split()| with `trimempty` instead.
 - *vim.lsp.util.try_trim_markdown_code_blocks()*
 - *vim.lsp.util.set_lines()*

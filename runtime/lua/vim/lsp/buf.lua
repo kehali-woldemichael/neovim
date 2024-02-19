@@ -34,7 +34,7 @@ end
 ---@return boolean if server responds.
 ---@deprecated
 function M.server_ready()
-  vim.deprecate('vim.lsp.buf.server_ready', nil, '0.10.0')
+  vim.deprecate('vim.lsp.buf.server_ready()', nil, '0.10')
   return not not vim.lsp.buf_notify(0, 'window/progress', {})
 end
 
@@ -46,7 +46,7 @@ function M.hover()
 end
 
 local function request_with_options(name, params, options)
-  local req_handler
+  local req_handler --- @type function?
   if options then
     req_handler = function(err, result, ctx, config)
       local client = assert(vim.lsp.get_client_by_id(ctx.client_id))
@@ -652,7 +652,7 @@ local function on_code_action_results(results, opts)
     end
     if action.command then
       local command = type(action.command) == 'table' and action.command or action
-      client._exec_cmd(command, ctx)
+      client:_exec_cmd(command, ctx)
     end
   end
 

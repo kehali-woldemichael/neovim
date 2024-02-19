@@ -46,7 +46,6 @@ typedef struct {
   // state for write_cb, while packing a single arglist to msgpack. This
   // might fail due to buffer overflow.
   size_t pack_totlen;
-  bool buf_overflow;
   char *temp_buf;
 
   // We start packing the two outermost msgpack arrays before knowing the total
@@ -93,3 +92,8 @@ struct ui_t {
   // TODO(bfredl): integrate into struct!
   UIData data[1];
 };
+
+typedef struct {
+  const char *name;
+  void (*fn)(Array args);
+} UIClientHandler;

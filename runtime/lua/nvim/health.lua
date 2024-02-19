@@ -23,9 +23,15 @@ local function check_runtime()
   health.start('Runtime')
   -- Files from an old installation.
   local bad_files = {
-    ['plugin/man.vim'] = false,
-    ['scripts.vim'] = false,
+    ['plugin/health.vim'] = false,
+    ['autoload/health/nvim.vim'] = false,
+    ['autoload/health/provider.vim'] = false,
     ['autoload/man.vim'] = false,
+    ['plugin/man.vim'] = false,
+    ['queries/help/highlights.scm'] = false,
+    ['queries/help/injections.scm'] = false,
+    ['scripts.vim'] = false,
+    ['syntax/syncolor.vim'] = false,
   }
   local bad_files_msg = ''
   for k, _ in pairs(bad_files) do
@@ -42,10 +48,10 @@ local function check_runtime()
   if not ok then
     health.error(
       string.format(
-        '$VIMRUNTIME has files from an old installation (this can cause weird behavior):\n%s',
+        'Found old files in $VIMRUNTIME (this can cause weird behavior):\n%s',
         bad_files_msg
       ),
-      { 'Delete $VIMRUNTIME (or uninstall Nvim), then reinstall Nvim.' }
+      { 'Delete the $VIMRUNTIME directory (or uninstall Nvim), then reinstall Nvim.' }
     )
   end
 end
@@ -183,10 +189,6 @@ local function check_rplugin_manifest()
   health.start('Remote Plugins')
 
   local existing_rplugins = {}
-  for _, item in ipairs(vim.fn['remote#host#PluginsForHost']('python')) do
-    existing_rplugins[item.path] = 'python'
-  end
-
   for _, item in ipairs(vim.fn['remote#host#PluginsForHost']('python3')) do
     existing_rplugins[item.path] = 'python3'
   end
@@ -324,24 +326,17 @@ local function check_tmux()
   end
 
   -- check for RGB capabilities
-  local info = vim.fn.system({ 'tmux', 'display-message', '-p', '#{client_termfeatures}' })
-  info = vim.split(vim.trim(info), ',', { trimempty = true })
-  if not vim.list_contains(info, 'RGB') then
-    local has_rgb = false
-    if #info == 0 then
-      -- client_termfeatures may not be supported; fallback to checking show-messages
-      info = vim.fn.system({ 'tmux', 'show-messages', '-JT' })
-      has_rgb = info:find(' Tc: (flag) true', 1, true) or info:find(' RGB: (flag) true', 1, true)
-    end
-    if not has_rgb then
-      health.warn(
-        "Neither Tc nor RGB capability set. True colors are disabled. |'termguicolors'| won't work properly.",
-        {
-          "Put this in your ~/.tmux.conf and replace XXX by your $TERM outside of tmux:\nset-option -sa terminal-features ',XXX:RGB'",
-          "For older tmux versions use this instead:\nset-option -ga terminal-overrides ',XXX:Tc'",
-        }
-      )
-    end
+  local info = vim.fn.system({ 'tmux', 'show-messages', '-T' })
+  local has_setrgbb = vim.fn.stridx(info, ' setrgbb: (string)') ~= -1
+  local has_setrgbf = vim.fn.stridx(info, ' setrgbf: (string)') ~= -1
+  if not has_setrgbb or not has_setrgbf then
+    health.warn(
+      "True color support could not be detected. |'termguicolors'| won't work properly.",
+      {
+        "Add the following to your tmux configuration file, replacing XXX by the value of $TERM outside of tmux:\nset-option -a terminal-features 'XXX:RGB'",
+        "For older tmux versions use this instead:\nset-option -a terminal-overrides 'XXX:Tc'",
+      }
+    )
   end
 end
 

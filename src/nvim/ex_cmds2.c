@@ -11,12 +11,15 @@
 #include "nvim/arglist.h"
 #include "nvim/ascii_defs.h"
 #include "nvim/autocmd.h"
+#include "nvim/autocmd_defs.h"
 #include "nvim/buffer.h"
+#include "nvim/buffer_defs.h"
 #include "nvim/bufwrite.h"
 #include "nvim/change.h"
 #include "nvim/channel.h"
 #include "nvim/eval.h"
 #include "nvim/eval/typval.h"
+#include "nvim/eval/typval_defs.h"
 #include "nvim/eval/vars.h"
 #include "nvim/ex_cmds.h"
 #include "nvim/ex_cmds2.h"
@@ -24,9 +27,10 @@
 #include "nvim/ex_docmd.h"
 #include "nvim/ex_getln.h"
 #include "nvim/fileio.h"
-#include "nvim/gettext.h"
+#include "nvim/gettext_defs.h"
 #include "nvim/globals.h"
 #include "nvim/highlight.h"
+#include "nvim/highlight_defs.h"
 #include "nvim/macros_defs.h"
 #include "nvim/mark.h"
 #include "nvim/memory.h"
@@ -100,7 +104,7 @@ void ex_perldo(exarg_T *eap)
 /// Careful: autocommands may make "buf" invalid!
 ///
 /// @return FAIL for failure, OK otherwise
-int autowrite(buf_T *buf, int forceit)
+int autowrite(buf_T *buf, bool forceit)
 {
   bufref_T bufref;
 
@@ -132,7 +136,7 @@ void autowrite_all(void)
     if (bufIsChanged(buf) && !buf->b_p_ro && !bt_dontwrite(buf)) {
       bufref_T bufref;
       set_bufref(&bufref, buf);
-      (void)buf_write_all(buf, false);
+      buf_write_all(buf, false);
       // an autocommand may have deleted the buffer
       if (!bufref_valid(&bufref)) {
         buf = firstbuf;
@@ -145,7 +149,7 @@ void autowrite_all(void)
 /// For flags use the CCGD_ values.
 bool check_changed(buf_T *buf, int flags)
 {
-  int forceit = (flags & CCGD_FORCEIT);
+  bool forceit = (flags & CCGD_FORCEIT);
   bufref_T bufref;
   set_bufref(&bufref, buf);
 
@@ -211,7 +215,7 @@ void dialog_changed(buf_T *buf, bool checkall)
     if (buf->b_fname != NULL
         && check_overwrite(&ea, buf, buf->b_fname, buf->b_ffname, false) == OK) {
       // didn't hit Cancel
-      (void)buf_write_all(buf, false);
+      buf_write_all(buf, false);
     }
   } else if (ret == VIM_NO) {
     unchanged(buf, true, false);
@@ -227,7 +231,7 @@ void dialog_changed(buf_T *buf, bool checkall)
         if (buf2->b_fname != NULL
             && check_overwrite(&ea, buf2, buf2->b_fname, buf2->b_ffname, false) == OK) {
           // didn't hit Cancel
-          (void)buf_write_all(buf2, false);
+          buf_write_all(buf2, false);
         }
         // an autocommand may have deleted the buffer
         if (!bufref_valid(&bufref)) {
@@ -261,7 +265,7 @@ bool dialog_close_terminal(buf_T *buf)
 
 /// @return true if the buffer "buf" can be abandoned, either by making it
 /// hidden, autowriting it or unloading it.
-bool can_abandon(buf_T *buf, int forceit)
+bool can_abandon(buf_T *buf, bool forceit)
 {
   return buf_hide(buf)
          || !bufIsChanged(buf)
@@ -401,7 +405,7 @@ buf_found:
 
   // Open the changed buffer in the current window.
   if (buf != curbuf) {
-    set_curbuf(buf, unload ? DOBUF_UNLOAD : DOBUF_GOTO);
+    set_curbuf(buf, unload ? DOBUF_UNLOAD : DOBUF_GOTO, true);
   }
 
 theend:
@@ -423,7 +427,7 @@ int check_fname(void)
 /// Flush the contents of a buffer, unless it has no file name.
 ///
 /// @return  FAIL for failure, OK otherwise
-int buf_write_all(buf_T *buf, int forceit)
+int buf_write_all(buf_T *buf, bool forceit)
 {
   buf_T *old_curbuf = curbuf;
 
@@ -547,7 +551,7 @@ void ex_listdo(exarg_T *eap)
           break;
         }
         assert(wp);
-        execute = !wp->w_floating || wp->w_float_config.focusable;
+        execute = !wp->w_floating || wp->w_config.focusable;
         if (execute) {
           win_goto(wp);
           if (curwin != wp) {
@@ -744,7 +748,7 @@ void ex_checktime(exarg_T *eap)
   } else {
     buf_T *buf = buflist_findnr((int)eap->line2);
     if (buf != NULL) {           // cannot happen?
-      (void)buf_check_timestamp(buf);
+      buf_check_timestamp(buf);
     }
   }
   no_check_timestamps = save_no_check_timestamps;
@@ -763,7 +767,7 @@ static void script_host_execute(char *name, exarg_T *eap)
     tv_list_append_number(args, (int)eap->line1);
     tv_list_append_number(args, (int)eap->line2);
 
-    (void)eval_call_provider(name, "execute", args, true);
+    eval_call_provider(name, "execute", args, true);
   }
 }
 
@@ -779,7 +783,7 @@ static void script_host_execute_file(char *name, exarg_T *eap)
     // current range
     tv_list_append_number(args, (int)eap->line1);
     tv_list_append_number(args, (int)eap->line2);
-    (void)eval_call_provider(name, "execute_file", args, true);
+    eval_call_provider(name, "execute_file", args, true);
   }
 }
 
@@ -790,13 +794,12 @@ static void script_host_do_range(char *name, exarg_T *eap)
     tv_list_append_number(args, (int)eap->line1);
     tv_list_append_number(args, (int)eap->line2);
     tv_list_append_string(args, eap->arg, -1);
-    (void)eval_call_provider(name, "do_range", args, true);
+    eval_call_provider(name, "do_range", args, true);
   }
 }
 
 /// ":drop"
-/// Opens the first argument in a window.  When there are two or more arguments
-/// the argument list is redefined.
+/// Opens the first argument in a window, and the argument list is redefined.
 void ex_drop(exarg_T *eap)
 {
   bool split = false;
@@ -821,6 +824,8 @@ void ex_drop(exarg_T *eap)
     // edited in a window yet.  It's like ":tab all" but without closing
     // windows or tabs.
     ex_all(eap);
+    cmdmod.cmod_tab = 0;
+    ex_rewind(eap);
     return;
   }
 
@@ -841,6 +846,7 @@ void ex_drop(exarg_T *eap)
         buf_check_timestamp(curbuf);
         curbuf->b_p_ar = save_ar;
       }
+      ex_rewind(eap);
       return;
     }
   }

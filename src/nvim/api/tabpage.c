@@ -49,7 +49,7 @@ ArrayOf(Window) nvim_tabpage_list_wins(Tabpage tabpage, Error *err)
 /// @param name     Variable name
 /// @param[out] err Error details, if any
 /// @return Variable value
-Object nvim_tabpage_get_var(Tabpage tabpage, String name, Error *err)
+Object nvim_tabpage_get_var(Tabpage tabpage, String name, Arena *arena, Error *err)
   FUNC_API_SINCE(1)
 {
   tabpage_T *tab = find_tab_by_handle(tabpage, err);
@@ -58,7 +58,7 @@ Object nvim_tabpage_get_var(Tabpage tabpage, String name, Error *err)
     return (Object)OBJECT_INIT;
   }
 
-  return dict_get_value(tab->tp_vars, name, err);
+  return dict_get_value(tab->tp_vars, name, arena, err);
 }
 
 /// Sets a tab-scoped (t:) variable
@@ -76,7 +76,7 @@ void nvim_tabpage_set_var(Tabpage tabpage, String name, Object value, Error *err
     return;
   }
 
-  dict_set_var(tab->tp_vars, name, value, false, false, err);
+  dict_set_var(tab->tp_vars, name, value, false, false, NULL, err);
 }
 
 /// Removes a tab-scoped (t:) variable
@@ -93,7 +93,7 @@ void nvim_tabpage_del_var(Tabpage tabpage, String name, Error *err)
     return;
   }
 
-  dict_set_var(tab->tp_vars, name, NIL, true, false, err);
+  dict_set_var(tab->tp_vars, name, NIL, true, false, NULL, err);
 }
 
 /// Gets the current window in a tabpage
@@ -120,6 +120,37 @@ Window nvim_tabpage_get_win(Tabpage tabpage, Error *err)
   }
   // There should always be a current window for a tabpage
   abort();
+}
+
+/// Sets the current window in a tabpage
+///
+/// @param tabpage  Tabpage handle, or 0 for current tabpage
+/// @param win Window handle, must already belong to {tabpage}
+/// @param[out] err Error details, if any
+void nvim_tabpage_set_win(Tabpage tabpage, Window win, Error *err)
+  FUNC_API_SINCE(12)
+{
+  tabpage_T *tp = find_tab_by_handle(tabpage, err);
+  if (!tp) {
+    return;
+  }
+
+  win_T *wp = find_window_by_handle(win, err);
+  if (!wp) {
+    return;
+  }
+
+  if (!tabpage_win_valid(tp, wp)) {
+    api_set_error(err, kErrorTypeException, "Window does not belong to tabpage %d", tp->handle);
+    return;
+  }
+
+  if (tp == curtab) {
+    win_enter(wp, true);
+  } else if (tp->tp_curwin != wp) {
+    tp->tp_prevwin = tp->tp_curwin;
+    tp->tp_curwin = wp;
+  }
 }
 
 /// Gets the tabpage number

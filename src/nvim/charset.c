@@ -18,6 +18,7 @@
 #include "nvim/cursor.h"
 #include "nvim/eval/typval_defs.h"
 #include "nvim/garray.h"
+#include "nvim/garray_defs.h"
 #include "nvim/globals.h"
 #include "nvim/keycodes.h"
 #include "nvim/macros_defs.h"
@@ -85,7 +86,7 @@ int init_chartab(void)
 ///
 /// @return FAIL if 'iskeyword', 'isident', 'isfname' or 'isprint' option has
 /// an error, OK otherwise.
-int buf_init_chartab(buf_T *buf, int global)
+int buf_init_chartab(buf_T *buf, bool global)
 {
   int c;
 
@@ -490,7 +491,7 @@ char *str_foldcase(char *str, int orglen, char *buf, int buflen)
           }
         }
       }
-      (void)utf_char2bytes(lc, STR_PTR(i));
+      utf_char2bytes(lc, STR_PTR(i));
     }
 
     // skip to next multi-byte char
@@ -848,11 +849,11 @@ bool vim_isfilec(int c)
 }
 
 /// Check if "c" is a valid file-name character, including characters left
-/// out of 'isfname' to make "gf" work, such as comma, space, '@', etc.
+/// out of 'isfname' to make "gf" work, such as ',', ' ', '@', ':', etc.
 bool vim_is_fname_char(int c)
   FUNC_ATTR_PURE FUNC_ATTR_WARN_UNUSED_RESULT
 {
-  return vim_isfilec(c) || c == ',' || c == ' ' || c == '@';
+  return vim_isfilec(c) || c == ',' || c == ' ' || c == '@' || c == ':';
 }
 
 /// Check that "c" is a valid file-name character or a wildcard character
@@ -1446,9 +1447,9 @@ bool rem_backslash(const char *str)
                  && str[1] != '?'
                  && !vim_isfilec((uint8_t)str[1])));
 
-#else  // ifdef BACKSLASH_IN_FILENAME
+#else
   return str[0] == '\\' && str[1] != NUL;
-#endif  // ifdef BACKSLASH_IN_FILENAME
+#endif
 }
 
 /// Halve the number of backslashes in a file name argument.

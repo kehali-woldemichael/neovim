@@ -146,6 +146,7 @@ variables can be used to overrule the filetype used for certain extensions:
 	`*.cls`		g:filetype_cls
 	`*.csh`		g:filetype_csh		|ft-csh-syntax|
 	`*.dat`		g:filetype_dat
+	`*.def`		g:filetype_def
 	`*.f`		g:filetype_f		|ft-forth-syntax|
 	`*.frm`		g:filetype_frm		|ft-form-syntax|
 	`*.fs`		g:filetype_fs		|ft-forth-syntax|
@@ -167,6 +168,7 @@ variables can be used to overrule the filetype used for certain extensions:
 	`*.sh`		g:bash_is_sh		|ft-sh-syntax|
 	`*.tex`		g:tex_flavor		|ft-tex-plugin|
 	`*.typ`		g:filetype_typ
+	`*.v`		g:filetype_v
 	`*.w`		g:filetype_w		|ft-cweb-syntax|
 
 For a few filetypes the global variable is used only when the filetype could
@@ -525,6 +527,18 @@ under it.  If not found, a new entry and item is prepended to the beginning of
 the Changelog.
 
 
+ASCIIDOC						*ft-asciidoc-plugin*
+
+To enable |folding| use this: >
+	let g:asciidoc_folding = 1
+
+To disable nesting of folded headers use this: >
+	let g:asciidoc_foldnested = 0
+
+To disable folding everything under the title use this: >
+	let asciidoc_fold_under_title = 0
+
+
 FORTRAN							*ft-fortran-plugin*
 
 Options:
@@ -685,7 +699,7 @@ To disable this behavior, set the following variable in your vimrc: >
 QUERY					                *ft-query-plugin*
 
 
-Linting of tree-sitter queries for installed parsers using
+Linting of treesitter queries for installed parsers using
 |vim.treesitter.query.lint()| is enabled by default on `BufEnter` and
 `BufWrite`. To change the events that trigger linting, use >lua
 
@@ -733,6 +747,14 @@ The following formatting setting are optionally available: >
 
 To enable this behavior, set the following variable in your vimrc: >
 	let g:rst_style = 1
+
+
+RNOWEB							      *ft-rnoweb-plugin*
+
+The 'formatexpr' option is set dynamically with different values for R code
+and for LaTeX code. If you prefer that 'formatexpr' is not set, add to your
+|vimrc|: >
+	let rnw_dynamic_comments = 0
 
 
 RPM SPEC						*ft-spec-plugin*

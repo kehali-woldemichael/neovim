@@ -8,9 +8,10 @@
 
 #include "nvim/ascii_defs.h"
 #include "nvim/getchar.h"
-#include "nvim/gettext.h"
+#include "nvim/gettext_defs.h"
 #include "nvim/globals.h"
 #include "nvim/highlight.h"
+#include "nvim/highlight_defs.h"
 #include "nvim/input.h"
 #include "nvim/keycodes.h"
 #include "nvim/mbyte.h"
@@ -34,7 +35,7 @@
 /// @param[in]  str  Prompt: question to ask user. Is always followed by
 ///                  " (y/n)?".
 /// @param[in]  direct  Determines what function to use to get user input. If
-///                     true then ui_inchar() will be used, otherwise vgetc().
+///                     true then os_inchar() will be used, otherwise vgetc().
 ///                     I.e. when direct is true then characters are obtained
 ///                     directly from the user without buffers involved.
 ///
@@ -158,7 +159,7 @@ int get_keystroke(MultiQueue *events)
 /// When "mouse_used" is not NULL allow using the mouse.
 ///
 /// @param colon  allow colon to abort
-int get_number(int colon, int *mouse_used)
+int get_number(int colon, bool *mouse_used)
 {
   int n = 0;
   int typed = 0;
@@ -219,12 +220,8 @@ int get_number(int colon, int *mouse_used)
 ///
 /// When "mouse_used" is not NULL allow using the mouse and in that case return
 /// the line number.
-int prompt_for_number(int *mouse_used)
+int prompt_for_number(bool *mouse_used)
 {
-  int i;
-  int save_cmdline_row;
-  int save_State;
-
   // When using ":silent" assume that <CR> was entered.
   if (mouse_used != NULL) {
     msg_puts(_("Type number and <Enter> or click with the mouse "
@@ -235,14 +232,14 @@ int prompt_for_number(int *mouse_used)
 
   // Set the state such that text can be selected/copied/pasted and we still
   // get mouse events.
-  save_cmdline_row = cmdline_row;
+  int save_cmdline_row = cmdline_row;
   cmdline_row = 0;
-  save_State = State;
+  int save_State = State;
   State = MODE_ASKMORE;  // prevents a screen update when using a timer
   // May show different mouse shape.
   setmouse();
 
-  i = get_number(true, mouse_used);
+  int i = get_number(true, mouse_used);
   if (KeyTyped) {
     // don't call wait_return() now
     if (msg_row > 0) {

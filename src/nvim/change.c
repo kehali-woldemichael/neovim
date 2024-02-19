@@ -8,7 +8,9 @@
 #include "nvim/ascii_defs.h"
 #include "nvim/assert_defs.h"
 #include "nvim/autocmd.h"
+#include "nvim/autocmd_defs.h"
 #include "nvim/buffer.h"
+#include "nvim/buffer_defs.h"
 #include "nvim/buffer_updates.h"
 #include "nvim/change.h"
 #include "nvim/charset.h"
@@ -19,17 +21,23 @@
 #include "nvim/eval.h"
 #include "nvim/ex_cmds_defs.h"
 #include "nvim/extmark.h"
+#include "nvim/extmark_defs.h"
 #include "nvim/fold.h"
-#include "nvim/gettext.h"
+#include "nvim/gettext_defs.h"
 #include "nvim/globals.h"
 #include "nvim/highlight.h"
+#include "nvim/highlight_defs.h"
 #include "nvim/indent.h"
 #include "nvim/indent_c.h"
 #include "nvim/insexpand.h"
 #include "nvim/macros_defs.h"
 #include "nvim/mark.h"
+#include "nvim/mark_defs.h"
+#include "nvim/marktree_defs.h"
 #include "nvim/mbyte.h"
+#include "nvim/mbyte_defs.h"
 #include "nvim/memline.h"
+#include "nvim/memline_defs.h"
 #include "nvim/memory.h"
 #include "nvim/message.h"
 #include "nvim/move.h"
@@ -41,6 +49,7 @@
 #include "nvim/search.h"
 #include "nvim/spell.h"
 #include "nvim/state.h"
+#include "nvim/state_defs.h"
 #include "nvim/strings.h"
 #include "nvim/textformat.h"
 #include "nvim/types_defs.h"
@@ -85,7 +94,7 @@ void change_warning(buf_T *buf, int col)
     msg_puts_attr(_(w_readonly), HL_ATTR(HLF_W) | MSG_HIST);
     set_vim_var_string(VV_WARNINGMSG, _(w_readonly), -1);
     msg_clr_eos();
-    (void)msg_end();
+    msg_end();
     if (msg_silent == 0 && !silent_mode && ui_active()) {
       ui_flush();
       os_delay(1002, true);  // give the user time to think about it
@@ -154,6 +163,71 @@ void changed_internal(buf_T *buf)
   need_maketitle = true;  // set window title later
 }
 
+/// Invalidate a window's w_valid flags and w_lines[] entries after changing lines.
+static void changed_lines_invalidate_win(win_T *wp, linenr_T lnum, colnr_T col, linenr_T lnume,
+                                         linenr_T xtra)
+{
+  // If the changed line is in a range of previously folded lines,
+  // compare with the first line in that range.
+  if (wp->w_cursor.lnum <= lnum) {
+    int i = find_wl_entry(wp, lnum);
+    if (i >= 0 && wp->w_cursor.lnum > wp->w_lines[i].wl_lnum) {
+      changed_line_abv_curs_win(wp);
+    }
+  }
+
+  if (wp->w_cursor.lnum > lnum) {
+    changed_line_abv_curs_win(wp);
+  } else if (wp->w_cursor.lnum == lnum && wp->w_cursor.col >= col) {
+    changed_cline_bef_curs(wp);
+  }
+  if (wp->w_botline >= lnum) {
+    // Assume that botline doesn't change (inserted lines make
+    // other lines scroll down below botline).
+    approximate_botline_win(wp);
+  }
+
+  // Check if any w_lines[] entries have become invalid.
+  // For entries below the change: Correct the lnums for inserted/deleted lines.
+  // Makes it possible to stop displaying after the change.
+  for (int i = 0; i < wp->w_lines_valid; i++) {
+    if (wp->w_lines[i].wl_valid) {
+      if (wp->w_lines[i].wl_lnum >= lnum) {
+        // Do not change wl_lnum at index zero, it is used to compare with w_topline.
+        // Invalidate it instead.
+        // If lines haven been inserted/deleted and the buffer has virt_lines,
+        // invalidate the line after the changed lines as some virt_lines may
+        // now be drawn above a different line.
+        if (i == 0 || wp->w_lines[i].wl_lnum < lnume
+            || (xtra != 0 && wp->w_lines[i].wl_lnum == lnume
+                && buf_meta_total(wp->w_buffer, kMTMetaLines) > 0)) {
+          // line included in change
+          wp->w_lines[i].wl_valid = false;
+        } else if (xtra != 0) {
+          // line below change
+          wp->w_lines[i].wl_lnum += xtra;
+          wp->w_lines[i].wl_lastlnum += xtra;
+        }
+      } else if (wp->w_lines[i].wl_lastlnum >= lnum) {
+        // change somewhere inside this range of folded lines,
+        // may need to be redrawn
+        wp->w_lines[i].wl_valid = false;
+      }
+    }
+  }
+}
+
+/// Line changed_lines_invalidate_win(), but for all windows displaying a buffer.
+void changed_lines_invalidate_buf(buf_T *buf, linenr_T lnum, colnr_T col, linenr_T lnume,
+                                  linenr_T xtra)
+{
+  FOR_ALL_WINDOWS_IN_TAB(wp, curtab) {
+    if (wp->w_buffer == buf) {
+      changed_lines_invalidate_win(wp, lnum, col, lnume, xtra);
+    }
+  }
+}
+
 /// Common code for when a change was made.
 /// See changed_lines() for the arguments.
 /// Careful: may trigger autocommands that reload the buffer.
@@ -184,7 +258,7 @@ static void changed_common(buf_T *buf, linenr_T lnum, colnr_T col, linenr_T lnum
     // Create a new entry if a new undo-able change was started or we
     // don't have an entry yet.
     if (buf->b_new_change || buf->b_changelistlen == 0) {
-      int add;
+      bool add;
       if (buf->b_changelistlen == 0) {
         add = true;
       } else {
@@ -248,8 +322,15 @@ static void changed_common(buf_T *buf, linenr_T lnum, colnr_T col, linenr_T lnum
   FOR_ALL_TAB_WINDOWS(tp, wp) {
     if (wp->w_buffer == buf) {
       // Mark this window to be redrawn later.
-      if (wp->w_redr_type < UPD_VALID) {
+      if (!redraw_not_allowed && wp->w_redr_type < UPD_VALID) {
         wp->w_redr_type = UPD_VALID;
+      }
+
+      // When inserting/deleting lines and the window has specific lines
+      // to be redrawn, w_redraw_top and w_redraw_bot may now be invalid,
+      // so just redraw everything.
+      if (xtra != 0 && wp->w_redraw_top != 0) {
+        redraw_later(wp, UPD_NOT_VALID);
       }
 
       linenr_T last = lnume + xtra - 1;  // last line after the change
@@ -287,55 +368,7 @@ static void changed_common(buf_T *buf, linenr_T lnum, colnr_T col, linenr_T lnum
         wp->w_cline_folded = folded;
       }
 
-      // If the changed line is in a range of previously folded lines,
-      // compare with the first line in that range.
-      if (wp->w_cursor.lnum <= lnum) {
-        int i = find_wl_entry(wp, lnum);
-        if (i >= 0 && wp->w_cursor.lnum > wp->w_lines[i].wl_lnum) {
-          changed_line_abv_curs_win(wp);
-        }
-      }
-
-      if (wp->w_cursor.lnum > lnum) {
-        changed_line_abv_curs_win(wp);
-      } else if (wp->w_cursor.lnum == lnum && wp->w_cursor.col >= col) {
-        changed_cline_bef_curs(wp);
-      }
-      if (wp->w_botline >= lnum) {
-        // Assume that botline doesn't change (inserted lines make
-        // other lines scroll down below botline).
-        approximate_botline_win(wp);
-      }
-
-      // Check if any w_lines[] entries have become invalid.
-      // For entries below the change: Correct the lnums for
-      // inserted/deleted lines.  Makes it possible to stop displaying
-      // after the change.
-      for (int i = 0; i < wp->w_lines_valid; i++) {
-        if (wp->w_lines[i].wl_valid) {
-          if (wp->w_lines[i].wl_lnum >= lnum) {
-            // Do not change wl_lnum at index zero, it is used to
-            // compare with w_topline.  Invalidate it instead.
-            // If the buffer has virt_lines, invalidate the line
-            // after the changed lines as the virt_lines for a
-            // changed line may become invalid.
-            if (i == 0 || wp->w_lines[i].wl_lnum < lnume
-                || (wp->w_lines[i].wl_lnum == lnume
-                    && wp->w_buffer->b_virt_line_blocks > 0)) {
-              // line included in change
-              wp->w_lines[i].wl_valid = false;
-            } else if (xtra != 0) {
-              // line below change
-              wp->w_lines[i].wl_lnum += xtra;
-              wp->w_lines[i].wl_lastlnum += xtra;
-            }
-          } else if (wp->w_lines[i].wl_lastlnum >= lnum) {
-            // change somewhere inside this range of folded lines,
-            // may need to be redrawn
-            wp->w_lines[i].wl_valid = false;
-          }
-        }
-      }
+      changed_lines_invalidate_win(wp, lnum, col, lnume, xtra);
 
       // Take care of side effects for setting w_topline when folds have
       // changed.  Esp. when the buffer was changed in another window.
@@ -344,20 +377,19 @@ static void changed_common(buf_T *buf, linenr_T lnum, colnr_T col, linenr_T lnum
       }
 
       // If lines have been added or removed, relative numbering always
-      // requires a redraw.
+      // requires an update even if cursor didn't move.
       if (wp->w_p_rnu && xtra != 0) {
         wp->w_last_cursor_lnum_rnu = 0;
-        redraw_later(wp, UPD_VALID);
       }
 
-      // Cursor line highlighting probably need to be updated with
-      // "UPD_VALID" if it's below the change.
-      // If the cursor line is inside the change we need to redraw more.
-      if (wp->w_p_cul) {
-        if (xtra == 0) {
-          redraw_later(wp, UPD_VALID);
-        } else if (lnum <= wp->w_last_cursorline) {
-          redraw_later(wp, UPD_SOME_VALID);
+      if (wp->w_p_cul && wp->w_last_cursorline >= lnum) {
+        if (wp->w_last_cursorline < lnume) {
+          // If 'cursorline' was inside the change, it has already
+          // been invalidated in w_lines[] by the loop above.
+          wp->w_last_cursorline = 0;
+        } else {
+          // If 'cursorline' was below the change, adjust its lnum.
+          wp->w_last_cursorline += xtra;
         }
       }
     }
@@ -365,9 +397,7 @@ static void changed_common(buf_T *buf, linenr_T lnum, colnr_T col, linenr_T lnum
 
   // Call update_screen() later, which checks out what needs to be redrawn,
   // since it notices b_mod_set and then uses b_mod_*.
-  if (must_redraw < UPD_VALID) {
-    must_redraw = UPD_VALID;
-  }
+  set_must_redraw(UPD_VALID);
 
   // when the cursor line is changed always trigger CursorMoved
   if (last_cursormoved_win == curwin && curwin->w_buffer == buf
@@ -480,13 +510,13 @@ void deleted_lines_mark(linenr_T lnum, int count)
 }
 
 /// Marks the area to be redrawn after a change.
-/// Consider also calling changed_line_display_buf().
+/// Consider also calling changed_lines_invalidate_buf().
 ///
 /// @param buf the buffer where lines were changed
 /// @param lnum first line with change
 /// @param lnume line below last changed line
 /// @param xtra number of extra lines (negative when deleting)
-void buf_redraw_changed_lines_later(buf_T *buf, linenr_T lnum, linenr_T lnume, linenr_T xtra)
+void changed_lines_redraw_buf(buf_T *buf, linenr_T lnum, linenr_T lnume, linenr_T xtra)
 {
   if (buf->b_mod_set) {
     // find the maximum area that must be redisplayed
@@ -534,7 +564,7 @@ void buf_redraw_changed_lines_later(buf_T *buf, linenr_T lnum, linenr_T lnume, l
 void changed_lines(buf_T *buf, linenr_T lnum, colnr_T col, linenr_T lnume, linenr_T xtra,
                    bool do_buf_event)
 {
-  buf_redraw_changed_lines_later(buf, lnum, lnume, xtra);
+  changed_lines_redraw_buf(buf, lnum, lnume, xtra);
 
   if (xtra == 0 && curwin->w_p_diff && curwin->w_buffer == buf && !diff_internal()) {
     // When the number of lines doesn't change then mark_adjust() isn't
@@ -547,8 +577,7 @@ void changed_lines(buf_T *buf, linenr_T lnum, colnr_T col, linenr_T lnume, linen
         redraw_later(wp, UPD_VALID);
         wlnum = diff_lnum_win(lnum, wp);
         if (wlnum > 0) {
-          buf_redraw_changed_lines_later(wp->w_buffer, wlnum,
-                                         lnume - lnum + wlnum, 0);
+          changed_lines_redraw_buf(wp->w_buffer, wlnum, lnume - lnum + wlnum, 0);
         }
       }
     }
@@ -567,7 +596,7 @@ void changed_lines(buf_T *buf, linenr_T lnum, colnr_T col, linenr_T lnume, linen
 /// When `ff` is true also reset 'fileformat'.
 /// When `always_inc_changedtick` is true b:changedtick is incremented even
 /// when the changed flag was off.
-void unchanged(buf_T *buf, int ff, bool always_inc_changedtick)
+void unchanged(buf_T *buf, bool ff, bool always_inc_changedtick)
 {
   if (buf->b_changed || (ff && file_ff_differs(buf, false))) {
     buf->b_changed = false;
@@ -922,8 +951,9 @@ int del_bytes(colnr_T count, bool fixpos_arg, bool use_delcombine)
 
 /// Copy the indent from ptr to the current line (and fill to size).
 /// Leaves the cursor on the first non-blank in the line.
+///
 /// @return true if the line was changed.
-int copy_indent(int size, char *src)
+bool copy_indent(int size, char *src)
 {
   char *p = NULL;
   char *line = NULL;
@@ -1053,7 +1083,7 @@ int copy_indent(int size, char *src)
 /// @param dir  FORWARD or BACKWARD
 ///
 /// @return true on success, false on failure
-int open_line(int dir, int flags, int second_line_indent, bool *did_do_comment)
+bool open_line(int dir, int flags, int second_line_indent, bool *did_do_comment)
 {
   char *next_line = NULL;         // copy of the next line
   char *p_extra = NULL;           // what goes to next line
@@ -1074,7 +1104,6 @@ int open_line(int dir, int flags, int second_line_indent, bool *did_do_comment)
   char saved_char = NUL;          // init for GCC
   pos_T *pos;
   bool do_si = may_do_si();
-  bool do_cindent;
   bool no_si = false;             // reset did_si afterwards
   int first_char = NUL;           // init for GCC
   int vreplace_mode;
@@ -1141,9 +1170,7 @@ int open_line(int dir, int flags, int second_line_indent, bool *did_do_comment)
   // indent to use for the new line.
   if (curbuf->b_p_ai || do_si) {
     // count white space on current line
-    newindent = get_indent_str_vtab(saved_line,
-                                    curbuf->b_p_ts,
-                                    curbuf->b_p_vts_array, false);
+    newindent = indent_size_ts(saved_line, curbuf->b_p_ts, curbuf->b_p_vts_array);
     if (newindent == 0 && !(flags & OPENLINE_COM_LIST)) {
       newindent = second_line_indent;  // for ^^D command in insert mode
     }
@@ -1155,10 +1182,8 @@ int open_line(int dir, int flags, int second_line_indent, bool *did_do_comment)
     //   "if (condition) {"
     if (!trunc_line && do_si && *saved_line != NUL
         && (p_extra == NULL || first_char != '{')) {
-      char *ptr;
-
       old_cursor = curwin->w_cursor;
-      ptr = saved_line;
+      char *ptr = saved_line;
       if (flags & OPENLINE_DO_COM) {
         lead_len = get_leader_len(ptr, NULL, false, true);
       } else {
@@ -1288,9 +1313,9 @@ int open_line(int dir, int flags, int second_line_indent, bool *did_do_comment)
   }
 
   // May do indenting after opening a new line.
-  do_cindent = !p_paste && (curbuf->b_p_cin || *curbuf->b_p_inde != NUL)
-               && in_cinkeys(dir == FORWARD ? KEY_OPEN_FORW : KEY_OPEN_BACK,
-                             ' ', linewhite(curwin->w_cursor.lnum));
+  bool do_cindent = !p_paste && (curbuf->b_p_cin || *curbuf->b_p_inde != NUL)
+                    && in_cinkeys(dir == FORWARD ? KEY_OPEN_FORW : KEY_OPEN_BACK,
+                                  ' ', linewhite(curwin->w_cursor.lnum));
 
   // Find out if the current line starts with a comment leader.
   // This may then be inserted in front of the new line.
@@ -1321,7 +1346,6 @@ int open_line(int dir, int flags, int second_line_indent, bool *did_do_comment)
     char lead_end[COM_MAX_LEN];             // end-comment string
     char *comment_end = NULL;               // where lead_end has been found
     int extra_space = false;                // append extra space
-    int current_flag;
     bool require_blank = false;             // requires blank after middle
     char *p2;
 
@@ -1333,7 +1357,7 @@ int open_line(int dir, int flags, int second_line_indent, bool *did_do_comment)
         continue;
       }
       if (*p == COM_START || *p == COM_MIDDLE) {
-        current_flag = (unsigned char)(*p);
+        int current_flag = (unsigned char)(*p);
         if (*p == COM_START) {
           // Doing "O" on a start of comment does not insert leader.
           if (dir == BACKWARD) {
@@ -1342,7 +1366,7 @@ int open_line(int dir, int flags, int second_line_indent, bool *did_do_comment)
           }
 
           // find start of middle part
-          (void)copy_option_part(&p, lead_middle, COM_MAX_LEN, ",");
+          copy_option_part(&p, lead_middle, COM_MAX_LEN, ",");
           require_blank = false;
         }
 
@@ -1353,7 +1377,7 @@ int open_line(int dir, int flags, int second_line_indent, bool *did_do_comment)
           }
           p++;
         }
-        (void)copy_option_part(&p, lead_middle, COM_MAX_LEN, ",");
+        copy_option_part(&p, lead_middle, COM_MAX_LEN, ",");
 
         while (*p && p[-1] != ':') {  // find end of end flags
           // Check whether we allow automatic ending of comments
@@ -1498,13 +1522,12 @@ int open_line(int dir, int flags, int second_line_indent, bool *did_do_comment)
             int repl_size = vim_strnsize(lead_repl, lead_repl_len);
             int old_size = 0;
             char *endp = p;
-            int l;
 
             while (old_size < repl_size && p > leader) {
               MB_PTR_BACK(leader, p);
               old_size += ptr2cells(p);
             }
-            l = lead_repl_len - (int)(endp - p);
+            int l = lead_repl_len - (int)(endp - p);
             if (l != 0) {
               memmove(endp + l, endp,
                       (size_t)((leader + lead_len) - endp));
@@ -1589,9 +1612,7 @@ int open_line(int dir, int flags, int second_line_indent, bool *did_do_comment)
 
         // Recompute the indent, it may have changed.
         if (curbuf->b_p_ai || do_si) {
-          newindent = get_indent_str_vtab(leader,
-                                          curbuf->b_p_ts,
-                                          curbuf->b_p_vts_array, false);
+          newindent = indent_size_ts(leader, curbuf->b_p_ts, curbuf->b_p_vts_array);
         }
 
         // Add the indent offset
@@ -1731,7 +1752,7 @@ int open_line(int dir, int flags, int second_line_indent, bool *did_do_comment)
     if (curwin->w_cursor.lnum >= Insstart.lnum + vr_lines_changed) {
       // In case we NL to a new line, BS to the previous one, and NL
       // again, we don't want to save the new line for undo twice.
-      (void)u_save_cursor();  // errors are ignored!
+      u_save_cursor();  // errors are ignored!
       vr_lines_changed++;
     }
     ml_replace(curwin->w_cursor.lnum, p_extra, true);
@@ -1754,14 +1775,14 @@ int open_line(int dir, int flags, int second_line_indent, bool *did_do_comment)
     }
     // Copy the indent
     if (curbuf->b_p_ci) {
-      (void)copy_indent(newindent, saved_line);
+      copy_indent(newindent, saved_line);
 
       // Set the 'preserveindent' option so that any further screwing
       // with the line doesn't entirely destroy our efforts to preserve
       // it.  It gets restored at the function end.
       curbuf->b_p_pi = true;
     } else {
-      (void)set_indent(newindent, SIN_INSERT|SIN_NOMARK);
+      set_indent(newindent, SIN_INSERT|SIN_NOMARK);
     }
     less_cols -= curwin->w_cursor.col;
 
@@ -2002,7 +2023,7 @@ int get_leader_len(char *line, char **flags, bool backward, bool include_space)
         *flags = list;              // remember where flags started
       }
       char *prev_list = list;
-      (void)copy_option_part(&list, part_buf, COM_MAX_LEN, ",");
+      copy_option_part(&list, part_buf, COM_MAX_LEN, ",");
       string = vim_strchr(part_buf, ':');
       if (string == NULL) {         // missing ':', ignore this part
         continue;
@@ -2135,7 +2156,7 @@ int get_last_leader_offset(char *line, char **flags)
 
       // Get one option part into part_buf[].  Advance list to next one.
       // put string at start of string.
-      (void)copy_option_part(&list, part_buf, COM_MAX_LEN, ",");
+      copy_option_part(&list, part_buf, COM_MAX_LEN, ",");
       char *string = vim_strchr(part_buf, ':');
       if (string == NULL) {  // If everything is fine, this cannot actually
                              // happen.
@@ -2217,7 +2238,7 @@ int get_last_leader_offset(char *line, char **flags)
       for (char *list = curbuf->b_p_com; *list;) {
         char *flags_save = list;
 
-        (void)copy_option_part(&list, part_buf2, COM_MAX_LEN, ",");
+        copy_option_part(&list, part_buf2, COM_MAX_LEN, ",");
         if (flags_save == com_flags) {
           continue;
         }

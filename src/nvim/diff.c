@@ -18,6 +18,7 @@
 #include "auto/config.h"
 #include "nvim/ascii_defs.h"
 #include "nvim/autocmd.h"
+#include "nvim/autocmd_defs.h"
 #include "nvim/buffer.h"
 #include "nvim/bufwrite.h"
 #include "nvim/change.h"
@@ -30,24 +31,30 @@
 #include "nvim/ex_cmds_defs.h"
 #include "nvim/ex_docmd.h"
 #include "nvim/extmark.h"
+#include "nvim/extmark_defs.h"
 #include "nvim/fileio.h"
 #include "nvim/fold.h"
 #include "nvim/garray.h"
-#include "nvim/gettext.h"
+#include "nvim/garray_defs.h"
+#include "nvim/gettext_defs.h"
 #include "nvim/globals.h"
 #include "nvim/linematch.h"
 #include "nvim/mark.h"
 #include "nvim/mbyte.h"
+#include "nvim/mbyte_defs.h"
 #include "nvim/memline.h"
 #include "nvim/memory.h"
 #include "nvim/message.h"
 #include "nvim/move.h"
 #include "nvim/normal.h"
 #include "nvim/option.h"
+#include "nvim/option_defs.h"
 #include "nvim/option_vars.h"
 #include "nvim/optionstr.h"
 #include "nvim/os/fs.h"
+#include "nvim/os/fs_defs.h"
 #include "nvim/os/os.h"
+#include "nvim/os/os_defs.h"
 #include "nvim/os/shell.h"
 #include "nvim/path.h"
 #include "nvim/pos_defs.h"
@@ -1012,7 +1019,7 @@ static int check_external_diff(diffio_T *diffio)
     if (fd == NULL) {
       io_error = true;
     } else {
-      if (fwrite("line1\n", (size_t)6, (size_t)1, fd) != 1) {
+      if (fwrite("line1\n", 6, 1, fd) != 1) {
         io_error = true;
       }
       fclose(fd);
@@ -1021,7 +1028,7 @@ static int check_external_diff(diffio_T *diffio)
       if (fd == NULL) {
         io_error = true;
       } else {
-        if (fwrite("line2\n", (size_t)6, (size_t)1, fd) != 1) {
+        if (fwrite("line2\n", 6, 1, fd) != 1) {
           io_error = true;
         }
         fclose(fd);
@@ -1166,9 +1173,9 @@ static int diff_file(diffio_T *dio)
                tmp_orig, tmp_new);
   append_redir(cmd, len, p_srr, tmp_diff);
   block_autocmds();  // Avoid ShellCmdPost stuff
-  (void)call_shell(cmd,
-                   kShellOptFilter | kShellOptSilent | kShellOptDoOut,
-                   NULL);
+  call_shell(cmd,
+             kShellOptFilter | kShellOptSilent | kShellOptDoOut,
+             NULL);
   unblock_autocmds();
   xfree(cmd);
   return OK;
@@ -1250,7 +1257,7 @@ void ex_diffpatch(exarg_T *eap)
     vim_snprintf(buf, buflen, "patch -o %s %s < %s",
                  tmp_new, tmp_orig, esc_name);
     block_autocmds();  // Avoid ShellCmdPost stuff
-    (void)call_shell(buf, kShellOptFilter, NULL);
+    call_shell(buf, kShellOptFilter, NULL);
     unblock_autocmds();
   }
 
@@ -1398,7 +1405,7 @@ static void set_diff_option(win_T *wp, bool value)
 /// Set options in window "wp" for diff mode.
 ///
 /// @param addbuf Add buffer to diff.
-void diff_win_options(win_T *wp, int addbuf)
+void diff_win_options(win_T *wp, bool addbuf)
 {
   win_T *old_curwin = curwin;
 
@@ -1430,7 +1437,7 @@ void diff_win_options(win_T *wp, int addbuf)
     }
     wp->w_p_fdm_save = xstrdup(wp->w_p_fdm);
   }
-  set_string_option_direct_in_win(wp, kOptFoldmethod, "diff", OPT_LOCAL | OPT_FREE, 0);
+  set_string_option_direct_in_win(wp, kOptFoldmethod, "diff", OPT_LOCAL, 0);
 
   if (!wp->w_p_diff) {
     wp->w_p_fen_save = wp->w_p_fen;
@@ -1888,7 +1895,7 @@ static void count_filler_lines_and_topline(int *curlinenum_to, int *linesfiller,
 {
   const diff_T *curdif = thistopdiff;
   int ch_virtual_lines = 0;
-  int isfiller = 0;
+  bool isfiller = false;
   while (virtual_lines_passed > 0) {
     if (ch_virtual_lines) {
       virtual_lines_passed--;
@@ -1901,7 +1908,7 @@ static void count_filler_lines_and_topline(int *curlinenum_to, int *linesfiller,
     } else {
       (*linesfiller) = 0;
       ch_virtual_lines = get_max_diff_length(curdif);
-      isfiller = (curdif->df_count[toidx] ? 0 : 1);
+      isfiller = (curdif->df_count[toidx] ? false : true);
       if (isfiller) {
         while (curdif && curdif->df_next && curdif->df_lnum[toidx] ==
                curdif->df_next->df_lnum[toidx]
@@ -2444,8 +2451,8 @@ void diff_set_topline(win_T *fromwin, win_T *towin)
   changed_line_abv_curs_win(towin);
 
   check_topfill(towin, false);
-  (void)hasFoldingWin(towin, towin->w_topline, &towin->w_topline,
-                      NULL, true, NULL);
+  hasFoldingWin(towin, towin->w_topline, &towin->w_topline,
+                NULL, true, NULL);
 }
 
 /// This is called when 'diffopt' is changed.

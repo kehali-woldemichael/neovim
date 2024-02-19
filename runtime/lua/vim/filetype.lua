@@ -267,6 +267,7 @@ local extension = {
   crdpro = 'chordpro',
   cho = 'chordpro',
   chordpro = 'chordpro',
+  ck = 'chuck',
   eni = 'cl',
   icl = 'clean',
   cljx = 'clojure',
@@ -341,7 +342,7 @@ local extension = {
   decl = detect.decl,
   dec = detect.decl,
   dcl = detect_seq(detect.decl, 'clean'),
-  def = 'def',
+  def = detect.def,
   desc = 'desc',
   directory = 'desktop',
   desktop = 'desktop',
@@ -363,6 +364,8 @@ local extension = {
   d = detect.dtrace,
   dts = 'dts',
   dtsi = 'dts',
+  dtso = 'dts',
+  its = 'dts',
   dylan = 'dylan',
   intr = 'dylanintr',
   lid = 'dylanlid',
@@ -674,8 +677,6 @@ local extension = {
   mmp = 'mmp',
   mms = detect.mms,
   DEF = 'modula2',
-  m2 = 'modula2',
-  mi = 'modula2',
   lm3 = 'modula3',
   mojo = 'mojo',
   ['🔥'] = 'mojo', -- 🙄
@@ -909,6 +910,7 @@ local extension = {
   sed = 'sed',
   sexp = 'sexplib',
   bash = detect.bash,
+  bats = detect.bash,
   ebuild = detect.bash,
   eclass = detect.bash,
   env = detect.sh,
@@ -1342,10 +1344,12 @@ local filename = {
   ['.hintrc'] = 'jsonc',
   ['.jsfmtrc'] = 'jsonc',
   ['.jshintrc'] = 'jsonc',
+  ['.luaurc'] = 'jsonc',
   ['.swrc'] = 'jsonc',
   ['.justfile'] = 'just',
   Kconfig = 'kconfig',
   ['Kconfig.debug'] = 'kconfig',
+  ['Config.in'] = 'kconfig',
   ['lftp.conf'] = 'lftp',
   ['.lftprc'] = 'lftp',
   ['/.libao'] = 'libao',
@@ -1737,6 +1741,7 @@ local pattern = {
   ['[jt]sconfig.*%.json'] = 'jsonc',
   ['[jJ]ustfile'] = 'just',
   ['Kconfig%..*'] = starsetf('kconfig'),
+  ['Config%.in%..*'] = starsetf('kconfig'),
   ['.*%.[Ss][Uu][Bb]'] = 'krl',
   ['lilo%.conf.*'] = starsetf('lilo'),
   ['.*/etc/logcheck/.*%.d.*/.*'] = starsetf('logcheck'),
@@ -1910,7 +1915,7 @@ local pattern = {
   ['.*baseq[2-3]/.*%.cfg'] = 'quake',
   ['.*quake[1-3]/.*%.cfg'] = 'quake',
   ['.*id1/.*%.cfg'] = 'quake',
-  ['.*/queries/.*%.scm'] = 'query', -- tree-sitter queries (Neovim only)
+  ['.*/queries/.*%.scm'] = 'query', -- treesitter queries (Neovim only)
   ['.*,v'] = 'rcs',
   ['%.reminders.*'] = starsetf('remind'),
   ['[rR]akefile.*'] = starsetf('ruby'),
@@ -2165,7 +2170,7 @@ end
 --- }
 --- ```
 ---
----@param filetypes vim.filetype.add.filetypes A table containing new filetype maps (see example).
+---@param filetypes vim.filetype.add.filetypes (table) A table containing new filetype maps (see example).
 function M.add(filetypes)
   for k, v in pairs(filetypes.extension or {}) do
     extension[k] = v
@@ -2300,7 +2305,7 @@ end
 --- vim.filetype.match({ contents = {'#!/usr/bin/env bash'} })
 --- ```
 ---
----@param args vim.filetype.match.args Table specifying which matching strategy to use.
+---@param args vim.filetype.match.args (table) Table specifying which matching strategy to use.
 ---                 Accepted keys are:
 ---                   * buf (number): Buffer number to use for matching. Mutually exclusive with
 ---                                   {contents}

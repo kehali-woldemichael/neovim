@@ -73,6 +73,9 @@ function vim.api.nvim__id_dictionary(dct) end
 function vim.api.nvim__id_float(flt) end
 
 --- @private
+--- NB: if your UI doesn't use hlstate, this will not return hlstate first
+--- time.
+---
 --- @param grid integer
 --- @param row integer
 --- @param col integer
@@ -152,7 +155,9 @@ function vim.api.nvim_buf_add_highlight(buffer, ns_id, hl_group, line, col_start
 ---                    will be `nvim_buf_changedtick_event`. Not for Lua
 ---                    callbacks.
 --- @param opts vim.api.keyset.buf_attach Optional parameters.
----                    • on_lines: Lua callback invoked on change. Return `true` to detach. Args:
+---                    • on_lines: Lua callback invoked on change. Return a
+---                      truthy value (not `false` or `nil`)
+---                      to detach. Args:
 ---                      • the string "lines"
 ---                      • buffer handle
 ---                      • b:changedtick
@@ -165,7 +170,9 @@ function vim.api.nvim_buf_add_highlight(buffer, ns_id, hl_group, line, col_start
 ---
 ---                    • on_bytes: Lua callback invoked on change. This
 ---                      callback receives more granular information about the
----                      change compared to on_lines. Return `true` to detach. Args:
+---                      change compared to on_lines. Return a truthy value
+---                      (not `false` or `nil`) to
+---                      detach. Args:
 ---                      • the string "bytes"
 ---                      • buffer handle
 ---                      • b:changedtick
@@ -173,11 +180,15 @@ function vim.api.nvim_buf_add_highlight(buffer, ns_id, hl_group, line, col_start
 ---                      • start column of the changed text
 ---                      • byte offset of the changed text (from the start of
 ---                        the buffer)
----                      • old end row of the changed text
----                      • old end column of the changed text
+---                      • old end row of the changed text (offset from start
+---                        row)
+---                      • old end column of the changed text (if old end row
+---                        = 0, offset from start column)
 ---                      • old end byte length of the changed text
----                      • new end row of the changed text
----                      • new end column of the changed text
+---                      • new end row of the changed text (offset from start
+---                        row)
+---                      • new end column of the changed text (if new end row
+---                        = 0, offset from start column)
 ---                      • new end byte length of the changed text
 ---
 ---                    • on_changedtick: Lua callback invoked on changedtick
@@ -311,11 +322,11 @@ function vim.api.nvim_buf_get_commands(buffer, opts) end
 ---               • details: Whether to include the details dict
 ---               • hl_name: Whether to include highlight group name instead
 ---                 of id, true if omitted
---- @return integer[]
+--- @return vim.api.keyset.get_extmark_item
 function vim.api.nvim_buf_get_extmark_by_id(buffer, ns_id, id, opts) end
 
---- Gets `extmarks` (including `signs`) in "traversal order" from a `charwise`
---- region defined by buffer positions (inclusive, 0-indexed `api-indexing`).
+--- Gets `extmarks` in "traversal order" from a `charwise` region defined by
+--- buffer positions (inclusive, 0-indexed `api-indexing`).
 --- Region can be given as (row,col) tuples, or valid extmark ids (whose
 --- positions define the bounds). 0 and -1 are understood as (0,0) and (-1,-1)
 --- respectively, thus the following are equivalent:
@@ -330,6 +341,9 @@ function vim.api.nvim_buf_get_extmark_by_id(buffer, ns_id, id, opts) end
 --- Note: when using extmark ranges (marks with a end_row/end_col position)
 --- the `overlap` option might be useful. Otherwise only the start position of
 --- an extmark will be considered.
+--- Note: legacy signs placed through the `:sign` commands are implemented as
+--- extmarks and will show up here. Their details array will contain a
+--- `sign_name` field.
 --- Example:
 ---
 --- ```lua
@@ -364,14 +378,14 @@ function vim.api.nvim_buf_get_extmark_by_id(buffer, ns_id, id, opts) end
 ---                 if their start position is less than `start`
 ---               • type: Filter marks by type: "highlight", "sign",
 ---                 "virt_text" and "virt_lines"
---- @return any[]
+--- @return vim.api.keyset.get_extmark_item[]
 function vim.api.nvim_buf_get_extmarks(buffer, ns_id, start, end_, opts) end
 
 --- Gets a list of buffer-local `mapping` definitions.
 ---
 --- @param buffer integer Buffer handle, or 0 for current buffer
 --- @param mode string Mode short-name ("n", "i", "v", ...)
---- @return table<string,any>[]
+--- @return vim.api.keyset.keymap[]
 function vim.api.nvim_buf_get_keymap(buffer, mode) end
 
 --- Gets a line-range from the buffer.
@@ -519,9 +533,12 @@ function vim.api.nvim_buf_line_count(buffer) end
 ---                 text is selected or hidden because of scrolling with
 ---                 'nowrap' or 'smoothscroll'. Currently only affects
 ---                 "overlay" virt_text.
+---               • virt_text_repeat_linebreak : repeat the virtual text on
+---                 wrapped lines.
 ---               • hl_mode : control how highlights are combined with the
 ---                 highlights of the text. Currently only affects virt_text
----                 highlights, but might affect `hl_group` in later versions.
+---                 highlights, but might affect `hl_group` in
+---                 later versions.
 ---                 • "replace": only show the virt_text color. This is the
 ---                   default.
 ---                 • "combine": combine with background text color.
@@ -555,7 +572,9 @@ function vim.api.nvim_buf_line_count(buffer) end
 ---                 text around the mark was deleted and then restored by
 ---                 undo. Defaults to true.
 ---               • invalidate : boolean that indicates whether to hide the
----                 extmark if the entirety of its range is deleted. If
+---                 extmark if the entirety of its range is deleted. For
+---                 hidden marks, an "invalid" key is added to the "details"
+---                 array of `nvim_buf_get_extmarks()` and family. If
 ---                 "undo_restore" is false, the extmark is deleted instead.
 ---               • priority: a priority value for the highlight group or sign
 ---                 attribute. For example treesitter highlighting uses a
@@ -590,6 +609,9 @@ function vim.api.nvim_buf_line_count(buffer) end
 ---                 drawn by a UI. When set, the UI will receive win_extmark
 ---                 events. Note: the mark is positioned by virt_text
 ---                 attributes. Can be used together with virt_text.
+---               • url: A URL to associate with this extmark. In the TUI, the
+---                 OSC 8 control sequence is used to generate a clickable
+---                 hyperlink to this URL.
 --- @return integer
 function vim.api.nvim_buf_set_extmark(buffer, ns_id, line, col, opts) end
 
@@ -731,7 +753,8 @@ function vim.api.nvim_chan_send(chan, data) end
 ---               • NOTE: Cannot be used with {pattern}
 ---
 ---             • group: (string|int) The augroup name or id.
----               • NOTE: If not passed, will only delete autocmds not in any group.
+---               • NOTE: If not passed, will only delete autocmds not in any
+---                 group.
 function vim.api.nvim_clear_autocmds(opts) end
 
 --- Executes an Ex command.
@@ -799,7 +822,8 @@ function vim.api.nvim_complete_set(index, opts) end
 --- @return integer
 function vim.api.nvim_create_augroup(name, opts) end
 
---- Creates an `autocommand` event handler, defined by `callback` (Lua function or Vimscript function name string) or `command` (Ex command string).
+--- Creates an `autocommand` event handler, defined by `callback` (Lua function
+--- or Vimscript function name string) or `command` (Ex command string).
 --- Example using Lua callback:
 ---
 --- ```lua
@@ -841,9 +865,9 @@ function vim.api.nvim_create_augroup(name, opts) end
 ---                troubleshooting).
 ---              • callback (function|string) optional: Lua function (or
 ---                Vimscript function name, if string) called when the
----                event(s) is triggered. Lua callback can return true to
----                delete the autocommand, and receives a table argument with
----                these keys:
+---                event(s) is triggered. Lua callback can return a truthy
+---                value (not `false` or `nil`) to delete the
+---                autocommand. Receives a table argument with these keys:
 ---                • id: (number) autocommand id
 ---                • event: (string) name of the triggered event
 ---                  `autocmd-events`
@@ -1131,12 +1155,12 @@ function vim.api.nvim_get_all_options_info() end
 ---             • buffer: Buffer number or list of buffer numbers for buffer
 ---               local autocommands `autocmd-buflocal`. Cannot be used with
 ---               {pattern}
---- @return any[]
+--- @return vim.api.keyset.get_autocmds.ret[]
 function vim.api.nvim_get_autocmds(opts) end
 
 --- Gets information about a channel.
 ---
---- @param chan integer
+--- @param chan integer channel_id, or 0 for current channel
 --- @return table<string,any>
 function vim.api.nvim_get_chan_info(chan) end
 
@@ -1157,7 +1181,7 @@ function vim.api.nvim_get_color_by_name(name) end
 --- Keys are color names (e.g. "Aqua") and values are 24-bit RGB color values
 --- (e.g. 65535).
 ---
---- @return table<string,any>
+--- @return table<string,integer>
 function vim.api.nvim_get_color_map() end
 
 --- Gets a map of global (non-buffer-local) Ex commands.
@@ -1207,7 +1231,7 @@ function vim.api.nvim_get_current_win() end
 ---                instead of effective definition `:hi-link`.
 ---              • create: (boolean, default true) When highlight group
 ---                doesn't exist create it.
---- @return table<string,any>
+--- @return vim.api.keyset.hl_info
 function vim.api.nvim_get_hl(ns_id, opts) end
 
 --- @deprecated
@@ -1242,7 +1266,7 @@ function vim.api.nvim_get_hl_ns(opts) end
 --- Gets a list of global (non-buffer-local) `mapping` definitions.
 ---
 --- @param mode string Mode short-name ("n", "i", "v", ...)
---- @return table<string,any>[]
+--- @return vim.api.keyset.keymap[]
 function vim.api.nvim_get_keymap(mode) end
 
 --- Returns a `(row, col, buffer, buffername)` tuple representing the position
@@ -1252,18 +1276,18 @@ function vim.api.nvim_get_keymap(mode) end
 ---
 --- @param name string Mark name
 --- @param opts vim.api.keyset.empty Optional parameters. Reserved for future use.
---- @return any[]
+--- @return vim.api.keyset.get_mark
 function vim.api.nvim_get_mark(name, opts) end
 
 --- Gets the current mode. `mode()` "blocking" is true if Nvim is waiting for
 --- input.
 ---
---- @return table<string,any>
+--- @return vim.api.keyset.get_mode
 function vim.api.nvim_get_mode() end
 
 --- Gets existing, non-anonymous `namespace`s.
 ---
---- @return table<string,any>
+--- @return table<string,integer>
 function vim.api.nvim_get_namespaces() end
 
 --- @deprecated
@@ -1273,7 +1297,7 @@ function vim.api.nvim_get_option(name) end
 
 --- @deprecated
 --- @param name string
---- @return table<string,any>
+--- @return vim.api.keyset.get_option_info
 function vim.api.nvim_get_option_info(name) end
 
 --- Gets the option information for one option from arbitrary buffer or window
@@ -1303,7 +1327,7 @@ function vim.api.nvim_get_option_info(name) end
 ---             • win: `window-ID`. Used for getting window local options.
 ---             • buf: Buffer number. Used for getting buffer local options.
 ---               Implies {scope} is "local".
---- @return table<string,any>
+--- @return vim.api.keyset.get_option_info
 function vim.api.nvim_get_option_info2(name, opts) end
 
 --- Gets the value of an option. The behavior of this function matches that of
@@ -1461,15 +1485,24 @@ function vim.api.nvim_notify(msg, log_level, opts) end
 --- @return integer
 function vim.api.nvim_open_term(buffer, opts) end
 
---- Open a new window.
---- Currently this is used to open floating and external windows. Floats are
---- windows that are drawn above the split layout, at some anchor position in
---- some other window. Floats can be drawn internally or by external GUI with
---- the `ui-multigrid` extension. External windows are only supported with
---- multigrid GUIs, and are displayed as separate top-level windows.
+--- Opens a new split window, or a floating window if `relative` is specified,
+--- or an external window (managed by the UI) if `external` is specified.
+--- Floats are windows that are drawn above the split layout, at some anchor
+--- position in some other window. Floats can be drawn internally or by
+--- external GUI with the `ui-multigrid` extension. External windows are only
+--- supported with multigrid GUIs, and are displayed as separate top-level
+--- windows.
 --- For a general overview of floats, see `api-floatwin`.
---- Exactly one of `external` and `relative` must be specified. The `width`
---- and `height` of the new window must be specified.
+--- The `width` and `height` of the new window must be specified when opening
+--- a floating window, but are optional for normal windows.
+--- If `relative` and `external` are omitted, a normal "split" window is
+--- created. The `win` property determines which window will be split. If no
+--- `win` is provided or `win == 0`, a window will be created adjacent to the
+--- current window. If -1 is provided, a top-level split will be created.
+--- `vertical` and `split` are only valid for normal windows, and are used to
+--- control split direction. For `vertical`, the exact direction is determined
+--- by `'splitright'` and `'splitbelow'`. Split windows cannot have
+--- `bufpos`/`row`/`col`/`border`/`title`/`footer` properties.
 --- With relative=editor (row=0,col=0) refers to the top-left corner of the
 --- screen-grid and (row=Lines-1,col=Columns-1) refers to the bottom-right
 --- corner. Fractional values are allowed, but the builtin implementation
@@ -1491,12 +1524,20 @@ function vim.api.nvim_open_term(buffer, opts) end
 --- ```lua
 ---     vim.api.nvim_open_win(0, false,
 ---       {relative='win', width=12, height=3, bufpos={100,10}})
+--- ```
+---
+--- Example (Lua): vertical split left of the current window
+---
+--- ```lua
+---     vim.api.nvim_open_win(0, false, {
+---       split = 'left',
+---       win = 0
 ---     })
 --- ```
 ---
 --- @param buffer integer Buffer to display, or 0 for current buffer
 --- @param enter boolean Enter the window (make it the current window)
---- @param config vim.api.keyset.float_config Map defining the window configuration. Keys:
+--- @param config vim.api.keyset.win_config Map defining the window configuration. Keys:
 ---               • relative: Sets the window layout to "floating", placed at
 ---                 (row,col) coordinates relative to:
 ---                 • "editor" The global editor grid
@@ -1505,7 +1546,8 @@ function vim.api.nvim_open_term(buffer, opts) end
 ---                 • "cursor" Cursor position in current window.
 ---                 • "mouse" Mouse position
 ---
----               • win: `window-ID` for relative="win".
+---               • win: `window-ID` window to split, or relative window when
+---                 creating a float (relative="win").
 ---               • anchor: Decides which corner of the float to place at
 ---                 (row,col):
 ---                 • "NW" northwest (default)
@@ -1517,8 +1559,8 @@ function vim.api.nvim_open_term(buffer, opts) end
 ---               • height: Window height (in character cells). Minimum of 1.
 ---               • bufpos: Places float relative to buffer text (only when
 ---                 relative="win"). Takes a tuple of zero-indexed [line,
----                 column]. `row` and `col` if given are applied relative to this position, else they
----                 default to:
+---                 column]. `row` and `col` if given are
+---                 applied relative to this position, else they default to:
 ---                 • `row=1` and `col=0` if `anchor` is "NW" or "NE"
 ---                 • `row=0` and `col=0` if `anchor` is "SW" or "SE" (thus
 ---                   like a tooltip near the buffer text).
@@ -1533,8 +1575,9 @@ function vim.api.nvim_open_term(buffer, opts) end
 ---               • external: GUI should display the window as an external
 ---                 top-level window. Currently accepts no other positioning
 ---                 configuration together with this.
----               • zindex: Stacking order. floats with higher `zindex` go on top on floats with lower indices. Must be larger
----                 than zero. The following screen elements have hard-coded
+---               • zindex: Stacking order. floats with higher `zindex` go on
+---                 top on floats with lower indices. Must be larger than
+---                 zero. The following screen elements have hard-coded
 ---                 z-indices:
 ---                 • 100: insert completion popupmenu
 ---                 • 200: message scrollback
@@ -1601,6 +1644,8 @@ function vim.api.nvim_open_term(buffer, opts) end
 ---               • fixed: If true when anchor is NW or SW, the float window
 ---                 would be kept fixed even if the window would be truncated.
 ---               • hide: If true the floating window will be hidden.
+---               • vertical: Split vertically `:vertical`.
+---               • split: Split direction: "left", "right", "above", "below".
 --- @return integer
 function vim.api.nvim_open_win(buffer, enter, config) end
 
@@ -1615,7 +1660,7 @@ function vim.api.nvim_out_write(str) end
 ---
 --- @param str string Command line string to parse. Cannot contain "\n".
 --- @param opts vim.api.keyset.empty Optional parameters. Reserved for future use.
---- @return table<string,any>
+--- @return vim.api.keyset.parse_cmd
 function vim.api.nvim_parse_cmd(str, opts) end
 
 --- Parse a Vimscript expression.
@@ -1653,7 +1698,8 @@ function vim.api.nvim_parse_expression(expr, flags, highlight) end
 --- @param data string Multiline input. May be binary (containing NUL bytes).
 --- @param crlf boolean Also break lines at CR and CRLF.
 --- @param phase integer -1: paste in a single call (i.e. without streaming). To
----              "stream" a paste, call `nvim_paste` sequentially with these `phase` values:
+---              "stream" a paste, call `nvim_paste` sequentially
+---              with these `phase` values:
 ---              • 1: starts the paste (exactly once)
 ---              • 2: continues the paste (zero or more times)
 ---              • 3: ends the paste (exactly once)
@@ -1756,9 +1802,7 @@ function vim.api.nvim_set_current_win(window) end
 ---              • on_buf: called for each buffer being redrawn (before window
 ---                callbacks) ["buf", bufnr, tick]
 ---              • on_win: called when starting to redraw a specific window.
----                botline_guess is an approximation that does not exceed the
----                last line number. ["win", winid, bufnr, topline,
----                botline_guess]
+---                ["win", winid, bufnr, topline, botline]
 ---              • on_line: called for each buffer line being redrawn. (The
 ---                interaction with fold lines is subject to change) ["win",
 ---                winid, bufnr, row]
@@ -1931,6 +1975,12 @@ function vim.api.nvim_tabpage_list_wins(tabpage) end
 --- @param value any Variable value
 function vim.api.nvim_tabpage_set_var(tabpage, name, value) end
 
+--- Sets the current window in a tabpage
+---
+--- @param tabpage integer Tabpage handle, or 0 for current tabpage
+--- @param win integer Window handle, must already belong to {tabpage}
+function vim.api.nvim_tabpage_set_win(tabpage, win) end
+
 --- Calls a function with window as temporary current window.
 ---
 --- @param window integer Window handle, or 0 for current window
@@ -1964,7 +2014,7 @@ function vim.api.nvim_win_get_buf(window) end
 --- `relative` is empty for normal windows.
 ---
 --- @param window integer Window handle, or 0 for current window
---- @return table<string,any>
+--- @return vim.api.keyset.float_config
 function vim.api.nvim_win_get_config(window) end
 
 --- Gets the (1,0)-indexed, buffer-relative cursor position for a given window
@@ -2045,7 +2095,7 @@ function vim.api.nvim_win_set_buf(window, buffer) end
 --- changed. `row`/`col` and `relative` must be reconfigured together.
 ---
 --- @param window integer Window handle, or 0 for current window
---- @param config vim.api.keyset.float_config Map defining the window configuration, see `nvim_open_win()`
+--- @param config vim.api.keyset.win_config Map defining the window configuration, see `nvim_open_win()`
 function vim.api.nvim_win_set_config(window, config) end
 
 --- Sets the (1,0)-indexed cursor position in the window. `api-indexing` This

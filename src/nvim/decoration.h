@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #include "klib/kvec.h"
-#include "nvim/decoration_defs.h"  // IWYU pragma: export
+#include "nvim/decoration_defs.h"  // IWYU pragma: keep
 #include "nvim/macros_defs.h"
 #include "nvim/marktree_defs.h"
 #include "nvim/pos_defs.h"  // IWYU pragma: keep
@@ -48,6 +48,8 @@ typedef struct {
   int attr_id;  ///< cached lookup of inl.hl_id if it was a highlight
   bool owned;   ///< ephemeral decoration, free memory immediately
   DecorPriority priority;
+  DecorPriority subpriority;  ///< Secondary priority value used for ordering (#27131).
+                              ///< Reflects the order of patterns/captures in the query file.
   DecorRangeKind kind;
   /// Screen column to draw the virtual text.
   /// When -1, the virtual text may be drawn after deciding where.

@@ -3,7 +3,7 @@ You can install Neovim from [download](#install-from-download), [package](#insta
 ---
 
 - To start Neovim, run `nvim` (not `neovim`).
-    - [Discover plugins](Related-projects#plugins).
+    - [Discover plugins](https://github.com/neovim/neovim/wiki/Related-projects#plugins).
 - Before upgrading to a new version, **check [Breaking Changes](https://neovim.io/doc/user/news.html#news-breaking).**
 - For config (vimrc) see [the FAQ](https://neovim.io/doc/user/faq.html#faq-general).
 
@@ -93,6 +93,20 @@ The [Releases](https://github.com/neovim/neovim/releases) page provides pre-buil
 
 ## Linux
 
+### Pre-built archives
+
+The [Releases](https://github.com/neovim/neovim/releases) page provides pre-built binaries for Linux systems.
+
+```sh
+curl -LO https://github.com/neovim/neovim/releases/latest/download/nvim-linux64.tar.gz
+sudo rm -rf /opt/nvim
+sudo tar -C /opt -xzf nvim-linux64.tar.gz
+```
+
+After this step add this to `~/.bashrc`:
+
+    export PATH="$PATH:/opt/nvim-linux64/bin"
+
 ### AppImage ("universal" Linux package)
 
 The [Releases](https://github.com/neovim/neovim/releases) page provides an [AppImage](https://appimage.org) that runs on most Linux systems. No installation is needed, just download `nvim.appimage` and run it. (It might not work if your Linux distribution is more than 4 years old.)
@@ -100,6 +114,15 @@ The [Releases](https://github.com/neovim/neovim/releases) page provides an [AppI
     curl -LO https://github.com/neovim/neovim/releases/latest/download/nvim.appimage
     chmod u+x nvim.appimage
     ./nvim.appimage
+
+To expose nvim globally:
+
+    mkdir -p /opt/nvim
+    mv nvim.appimage /opt/nvim/nvim
+
+And the following line to `~/.bashrc`:
+
+    export PATH="$PATH:/opt/nvim/" 
 
 If the `./nvim.appimage` command fails, try:
 ```sh
@@ -111,7 +134,7 @@ sudo mv squashfs-root /
 sudo ln -s /squashfs-root/AppRun /usr/bin/nvim
 nvim
 ```
- 
+
 ### Arch Linux
 
 Neovim can be installed from the community repository:
@@ -154,17 +177,6 @@ Neovim is in [Debian](https://packages.debian.org/search?keywords=neovim).
 Python (`:python`) support is installable via the package manager on Debian unstable.
 
     sudo apt-get install python3-neovim
-
-If installing via appimage, the following commands may be helpful in updating default paths:
-
-    # CUSTOM_NVIM_PATH=/usr/local/bin/nvim.appimage
-    # Set the above with the correct path, then run the rest of the commands:
-    set -u
-    sudo update-alternatives --install /usr/bin/ex ex "${CUSTOM_NVIM_PATH}" 110
-    sudo update-alternatives --install /usr/bin/vi vi "${CUSTOM_NVIM_PATH}" 110
-    sudo update-alternatives --install /usr/bin/view view "${CUSTOM_NVIM_PATH}" 110
-    sudo update-alternatives --install /usr/bin/vim vim "${CUSTOM_NVIM_PATH}" 110
-    sudo update-alternatives --install /usr/bin/vimdiff vimdiff "${CUSTOM_NVIM_PATH}" 110
 
 ### Exherbo Linux
 
@@ -214,7 +226,6 @@ Neovim can be installed with:
 
     sudo -H Compile NeoVim
 
-
 ### Nix / NixOS
 
 Neovim can be installed with:
@@ -262,9 +273,6 @@ Neovim is in [PLD Linux](https://github.com/pld-linux/neovim):
 ### Slackware
 
 See [neovim on SlackBuilds](https://slackbuilds.org/apps/neovim/).
-
-For instructions on how to install the Python modules, see [`:help provider-python`].
-
 
 ### Source Mage
 
@@ -333,19 +341,6 @@ If you're using an older version Ubuntu you must use:
     sudo apt-get install python-dev python-pip python3-dev
     sudo apt-get install python3-setuptools
     sudo easy_install3 pip
-
-For instructions to install the Python modules, see [`:help provider-python`].
-
-If you want to use Neovim for some (or all) of the editor alternatives, use the following commands:
-
-    sudo update-alternatives --install /usr/bin/vi vi /usr/bin/nvim 60
-    sudo update-alternatives --config vi
-    sudo update-alternatives --install /usr/bin/vim vim /usr/bin/nvim 60
-    sudo update-alternatives --config vim
-    sudo update-alternatives --install /usr/bin/editor editor /usr/bin/nvim 60
-    sudo update-alternatives --config editor
-
-Note, however, that special interfaces, like `view` for `nvim -R`, are not supported.  (See [#1646](https://github.com/neovim/neovim/issues/1646) and [#2008](https://github.com/neovim/neovim/pull/2008).)
 
 ### Void-Linux
 
@@ -419,7 +414,3 @@ Alternatively, just delete the `CMAKE_INSTALL_PREFIX` artifacts:
 sudo rm /usr/local/bin/nvim
 sudo rm -r /usr/local/share/nvim/
 ```
-
-
-
-[`:help provider-python`]: https://neovim.io/doc/user/provider.html#provider-python

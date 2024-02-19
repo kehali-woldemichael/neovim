@@ -10,6 +10,7 @@
 
 #include "nvim/ascii_defs.h"
 #include "nvim/autocmd.h"
+#include "nvim/autocmd_defs.h"
 #include "nvim/buffer_defs.h"
 #include "nvim/charset.h"
 #include "nvim/cmdexpand_defs.h"
@@ -23,10 +24,13 @@
 #include "nvim/ex_cmds_defs.h"
 #include "nvim/ex_docmd.h"
 #include "nvim/ex_eval.h"
+#include "nvim/ex_eval_defs.h"
 #include "nvim/ex_getln.h"
 #include "nvim/garray.h"
+#include "nvim/garray_defs.h"
 #include "nvim/getchar.h"
-#include "nvim/gettext.h"
+#include "nvim/getchar_defs.h"
+#include "nvim/gettext_defs.h"
 #include "nvim/globals.h"
 #include "nvim/hashtab.h"
 #include "nvim/insexpand.h"
@@ -41,11 +45,13 @@
 #include "nvim/path.h"
 #include "nvim/profile.h"
 #include "nvim/regexp.h"
+#include "nvim/regexp_defs.h"
 #include "nvim/runtime.h"
 #include "nvim/search.h"
 #include "nvim/strings.h"
 #include "nvim/types_defs.h"
 #include "nvim/ui.h"
+#include "nvim/ui_defs.h"
 #include "nvim/vim_defs.h"
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
@@ -105,7 +111,6 @@ static int get_function_args(char **argp, char endchar, garray_T *newargs, int *
   bool mustend = false;
   char *arg = *argp;
   char *p = arg;
-  uint8_t c;
 
   if (newargs != NULL) {
     ga_init(newargs, (int)sizeof(char *), 3);
@@ -142,7 +147,7 @@ static int get_function_args(char **argp, char endchar, garray_T *newargs, int *
       }
       if (newargs != NULL) {
         ga_grow(newargs, 1);
-        c = (uint8_t)(*p);
+        uint8_t c = (uint8_t)(*p);
         *p = NUL;
         arg = xstrdup(arg);
 
@@ -173,7 +178,7 @@ static int get_function_args(char **argp, char endchar, garray_T *newargs, int *
           while (p > expr && ascii_iswhite(p[-1])) {
             p--;
           }
-          c = (uint8_t)(*p);
+          uint8_t c = (uint8_t)(*p);
           *p = NUL;
           expr = xstrdup(expr);
           ((char **)(default_args->ga_data))[default_args->ga_len] = expr;
@@ -325,7 +330,6 @@ int get_lambda_tv(char **arg, typval_T *rettv, evalarg_T *evalarg)
 
   if (evaluate) {
     int flags = 0;
-    char *p;
     garray_T newlines;
 
     char *name = get_lambda_name();
@@ -338,7 +342,7 @@ int get_lambda_tv(char **arg, typval_T *rettv, evalarg_T *evalarg)
 
     // Add "return " before the expression.
     size_t len = (size_t)(7 + end - start + 1);
-    p = xmalloc(len);
+    char *p = xmalloc(len);
     ((char **)(newlines.ga_data))[newlines.ga_len++] = p;
     STRCPY(p, "return ");
     xstrlcpy(p + 7, start, (size_t)(end - start) + 1);
@@ -918,7 +922,6 @@ void call_user_func(ufunc_T *fp, int argcount, typval_T *argvars, typval_T *rett
   FUNC_ATTR_NONNULL_ARG(1, 3, 4)
 {
   bool using_sandbox = false;
-  int save_did_emsg;
   static int depth = 0;
   dictitem_T *v;
   int fixvar_idx = 0;           // index in fc_fixvar[]
@@ -1167,7 +1170,7 @@ void call_user_func(ufunc_T *fp, int argcount, typval_T *argvars, typval_T *rett
 
   const sctx_T save_current_sctx = current_sctx;
   current_sctx = fp->uf_script_ctx;
-  save_did_emsg = did_emsg;
+  int save_did_emsg = did_emsg;
   did_emsg = false;
 
   if (default_arg_err && (fp->uf_flags & FC_ABORT)) {
@@ -1178,7 +1181,7 @@ void call_user_func(ufunc_T *fp, int argcount, typval_T *argvars, typval_T *rett
     // A Lambda always has the command "return {expr}".  It is much faster
     // to evaluate {expr} directly.
     ex_nesting_level++;
-    (void)eval1(&p, rettv, &EVALARG_EVALUATE);
+    eval1(&p, rettv, &EVALARG_EVALUATE);
     ex_nesting_level--;
   } else {
     // call do_cmdline() to execute the lines
@@ -2072,7 +2075,7 @@ char *save_function_name(char **name, bool skip, int flags, funcdict_T *fudi)
 
   if (strncmp(p, "<lambda>", 8) == 0) {
     p += 8;
-    (void)getdigits(&p, false, 0);
+    getdigits(&p, false, 0);
     saved = xmemdupz(*name, (size_t)(p - *name));
     if (fudi != NULL) {
       CLEAR_POINTER(fudi);
@@ -3661,7 +3664,7 @@ bool free_unref_funccal(int copyID, int testing)
   if (did_free_funccal) {
     // When a funccal was freed some more items might be garbage
     // collected, so run again.
-    (void)garbage_collect(testing);
+    garbage_collect(testing);
   }
   return did_free;
 }

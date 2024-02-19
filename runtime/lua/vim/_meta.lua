@@ -1,5 +1,7 @@
 --- @meta
 
+--- @alias elem_or_list<T> T|T[]
+
 ---@type uv
 vim.uv = ...
 
@@ -11,6 +13,7 @@ vim.diagnostic = require('vim.diagnostic')
 vim.filetype = require('vim.filetype')
 vim.fs = require('vim.fs')
 vim.func = require('vim.func')
+vim.glob = require('vim.glob')
 vim.health = require('vim.health')
 vim.highlight = require('vim.highlight')
 vim.iter = require('vim.iter')

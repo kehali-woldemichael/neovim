@@ -2,13 +2,12 @@
 -- And test "U" in Visual mode, also on German sharp S.
 
 local helpers = require('test.functional.helpers')(after_each)
-local nvim, eq = helpers.meths, helpers.eq
+local nvim, eq = helpers.api, helpers.eq
 local insert, feed = helpers.insert, helpers.feed
 local clear, expect = helpers.clear, helpers.expect
 local feed_command = helpers.feed_command
 
 describe('Visual block mode', function()
-
   before_each(function()
     clear()
 
@@ -135,7 +134,7 @@ describe('Visual block mode', function()
   end)
 
   it('should make a selected part uppercase', function()
-    -- GUe must uppercase a whole word, also when ß changes to SS.
+    -- GUe must uppercase a whole word, also when ß changes to ẞ.
     feed('Gothe youtußeuu end<ESC>Ypk0wgUe<CR>')
     -- GUfx must uppercase until x, inclusive.
     feed('O- youßtußexu -<ESC>0fogUfx<CR>')
@@ -151,13 +150,13 @@ describe('Visual block mode', function()
 
     expect([[
       
-      the YOUTUSSEUU end
-      - yOUSSTUSSEXu -
-      THE YOUTUSSEUU END
-      111THE YOUTUSSEUU END
+      the YOUTUẞEUU end
+      - yOUẞTUẞEXu -
+      THE YOUTUẞEUU END
+      111THE YOUTUẞEUU END
       BLAH DI
       DOH DUT
-      222the yoUTUSSEUU END
+      222the yoUTUẞEUU END
       333THE YOUTUßeuu end]])
   end)
 
@@ -205,14 +204,14 @@ describe('Visual block mode', function()
     feed('G2l')
     feed('2k<C-v>$gj<ESC>')
     feed_command([[let cpos=getpos("'>")]])
-    local cpos = nvim.get_var('cpos')
+    local cpos = nvim.nvim_get_var('cpos')
     local expected = {
       col = 4,
-      off = 0
+      off = 0,
     }
     local actual = {
       col = cpos[3],
-      off = cpos[4]
+      off = cpos[4],
     }
 
     eq(expected, actual)

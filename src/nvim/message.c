@@ -11,6 +11,7 @@
 #include <uv.h>
 
 #include "klib/kvec.h"
+#include "nvim/api/private/defs.h"
 #include "nvim/api/private/helpers.h"
 #include "nvim/ascii_defs.h"
 #include "nvim/buffer_defs.h"
@@ -19,23 +20,28 @@
 #include "nvim/drawscreen.h"
 #include "nvim/eval.h"
 #include "nvim/eval/typval.h"
+#include "nvim/eval/typval_defs.h"
+#include "nvim/event/defs.h"
 #include "nvim/event/loop.h"
 #include "nvim/event/multiqueue.h"
 #include "nvim/ex_cmds_defs.h"
 #include "nvim/ex_eval.h"
 #include "nvim/fileio.h"
 #include "nvim/garray.h"
+#include "nvim/garray_defs.h"
 #include "nvim/getchar.h"
-#include "nvim/gettext.h"
+#include "nvim/gettext_defs.h"
 #include "nvim/globals.h"
 #include "nvim/grid.h"
 #include "nvim/highlight.h"
+#include "nvim/highlight_defs.h"
 #include "nvim/indent.h"
 #include "nvim/input.h"
 #include "nvim/keycodes.h"
 #include "nvim/log.h"
 #include "nvim/main.h"
 #include "nvim/mbyte.h"
+#include "nvim/mbyte_defs.h"
 #include "nvim/memory.h"
 #include "nvim/message.h"
 #include "nvim/mouse.h"
@@ -49,11 +55,13 @@
 #include "nvim/pos_defs.h"
 #include "nvim/regexp.h"
 #include "nvim/runtime.h"
+#include "nvim/runtime_defs.h"
 #include "nvim/state_defs.h"
 #include "nvim/strings.h"
 #include "nvim/types_defs.h"
 #include "nvim/ui.h"
 #include "nvim/ui_compositor.h"
+#include "nvim/ui_defs.h"
 #include "nvim/vim_defs.h"
 
 // To be able to scroll back at the "more" and "hit-enter" prompts we need to
@@ -121,7 +129,7 @@ bool keep_msg_more = false;    // keep_msg was set by msgmore()
 //                  Set: When the ruler or typeahead display is overwritten,
 //                  scrolling the screen for some message.
 // keep_msg         Message to be displayed after redrawing the screen, in
-//                  main_loop().
+//                  Normal mode main loop.
 //                  This is an allocated string or NULL when not used.
 
 // Extended msg state, currently used for external UIs with ext_messages
@@ -143,9 +151,8 @@ static int msg_grid_pos_at_flush = 0;
 
 static void ui_ext_msg_set_pos(int row, bool scrolled)
 {
-  char buf[MB_MAXCHAR + 1];
-  size_t size = (size_t)utf_char2bytes(curwin->w_p_fcs_chars.msgsep, buf);
-  buf[size] = '\0';
+  char buf[MAX_SCHAR_SIZE];
+  size_t size = schar_get(buf, curwin->w_p_fcs_chars.msgsep);
   ui_call_msg_set_pos(msg_grid.handle, row, scrolled,
                       (String){ .data = buf, .size = size });
 }
@@ -203,8 +210,13 @@ void msg_grid_validate(void)
     msg_grid_adj.target = &default_grid;
     redraw_cmdline = true;
   } else if (msg_grid.chars && !msg_scrolled && msg_grid_pos != max_rows) {
+    int diff = msg_grid_pos - max_rows;
     msg_grid_set_pos(max_rows, false);
+    if (diff > 0) {
+      grid_clear(&msg_grid_adj, Rows - diff, Rows, 0, Columns, HL_ATTR(HLF_MSG));
+    }
   }
+  msg_grid_adj.cols = Columns;
 
   if (msg_grid.chars && !msg_scrolled && cmdline_row < msg_grid_pos) {
     // TODO(bfredl): this should already be the case, but fails in some
@@ -225,10 +237,10 @@ int verb_msg(const char *s)
 }
 
 /// Displays the string 's' on the status line
-/// When terminal not initialized (yet) os_errmsg(..) is used.
+/// When terminal not initialized (yet) printf("%s", ..) is used.
 ///
 /// @return  true if wait_return() not called
-int msg(const char *s, const int attr)
+bool msg(const char *s, const int attr)
   FUNC_ATTR_NONNULL_ARG(1)
 {
   return msg_attr_keep(s, attr, false, false);
@@ -289,7 +301,6 @@ bool msg_attr_keep(const char *s, int attr, bool keep, bool multiline)
   FUNC_ATTR_NONNULL_ALL
 {
   static int entered = 0;
-  char *buf = NULL;
 
   if (keep && multiline) {
     // Not implemented. 'multiline' is only used by nvim-added messages,
@@ -328,7 +339,7 @@ bool msg_attr_keep(const char *s, int attr, bool keep, bool multiline)
 
   // Truncate the message if needed.
   msg_start();
-  buf = msg_strtrunc(s, false);
+  char *buf = msg_strtrunc(s, false);
   if (buf != NULL) {
     s = buf;
   }
@@ -342,7 +353,7 @@ bool msg_attr_keep(const char *s, int attr, bool keep, bool multiline)
   if (need_clear) {
     msg_clr_eos();
   }
-  int retval = msg_end();
+  bool retval = msg_end();
 
   if (keep && retval && vim_strsize(s) < (Rows - cmdline_row - 1) * Columns + sc_col) {
     set_keep_msg(s, 0);
@@ -461,7 +472,7 @@ void trunc_string(const char *s, char *buf, int room_in, int buflen)
     }
   } else if (e + 3 < buflen) {
     // set the middle and copy the last part
-    memmove(buf + e, "...", (size_t)3);
+    memmove(buf + e, "...", 3);
     len = (int)strlen(s + i) + 1;
     if (len >= buflen - e - 3) {
       len = buflen - e - 3 - 1;
@@ -748,7 +759,7 @@ bool emsg_multiline(const char *s, bool multiline)
 /// emsg() - display an error message
 ///
 /// Rings the bell, if appropriate, and calls message() to do the real work
-/// When terminal not initialized (yet) os_errmsg(..) is used.
+/// When terminal not initialized (yet) fprintf(stderr, "%s", ..) is used.
 ///
 /// @return true if wait_return() not called
 bool emsg(const char *s)
@@ -840,7 +851,7 @@ void siemsg(const char *s, ...)
 
   va_list ap;
   va_start(ap, s);
-  (void)semsgv(s, ap);
+  semsgv(s, ap);
   va_end(ap);
 #ifdef ABORT_ON_INTERNAL_ERROR
   msg_putchar('\n');  // avoid overwriting the error message
@@ -858,7 +869,7 @@ void internal_error(const char *where)
 static void msg_semsg_event(void **argv)
 {
   char *s = argv[0];
-  (void)emsg(s);
+  emsg(s);
   xfree(s);
 }
 
@@ -877,7 +888,7 @@ void msg_schedule_semsg(const char *const fmt, ...)
 static void msg_semsg_multiline_event(void **argv)
 {
   char *s = argv[0];
-  (void)emsg_multiline(s, true);
+  emsg_multiline(s, true);
   xfree(s);
 }
 
@@ -905,7 +916,7 @@ char *msg_trunc(char *s, bool force, int attr)
   char *ts = msg_may_trunc(force, s);
 
   msg_hist_off = true;
-  int n = msg(ts, attr);
+  bool n = msg(ts, attr);
   msg_hist_off = false;
 
   if (n) {
@@ -970,7 +981,7 @@ static void add_msg_hist_multiattr(const char *s, int len, int attr, bool multil
 
   // Don't let the message history get too big
   while (msg_hist_len > MAX_MSG_HIST_LEN) {
-    (void)delete_first_msg();
+    delete_first_msg();
   }
 
   // allocate an entry and add the message at the end of the history
@@ -1035,7 +1046,7 @@ void ex_messages(exarg_T *eap)
     int keep = eap->addr_count == 0 ? 0 : eap->line2;
 
     while (msg_hist_len > keep) {
-      (void)delete_first_msg();
+      delete_first_msg();
     }
     return;
   }
@@ -1250,7 +1261,7 @@ void wait_return(int redraw)
     // Avoid that the mouse-up event causes visual mode to start.
     if (c == K_LEFTMOUSE || c == K_MIDDLEMOUSE || c == K_RIGHTMOUSE
         || c == K_X1MOUSE || c == K_X2MOUSE) {
-      (void)jump_to_mouse(MOUSE_SETPOS, NULL, 0);
+      jump_to_mouse(MOUSE_SETPOS, NULL, 0);
     } else if (vim_strchr("\r\n ", c) == NULL && c != Ctrl_C) {
       // Put the character back in the typeahead buffer.  Don't use the
       // stuff buffer, because lmaps wouldn't work.
@@ -1702,6 +1713,39 @@ char *str2special_save(const char *const str, const bool replace_spaces, const b
   return (char *)ga.ga_data;
 }
 
+/// Convert string, replacing key codes with printables
+///
+/// Used for lhs or rhs of mappings.
+///
+/// @param[in]  str  String to convert.
+/// @param[in]  replace_spaces  Convert spaces into `<Space>`, normally used for
+///                             lhs of mapping and keytrans(), but not rhs.
+/// @param[in]  replace_lt  Convert `<` into `<lt>`.
+///
+/// @return [allocated] Converted string.
+char *str2special_arena(const char *str, bool replace_spaces, bool replace_lt, Arena *arena)
+  FUNC_ATTR_NONNULL_ALL FUNC_ATTR_WARN_UNUSED_RESULT FUNC_ATTR_MALLOC
+  FUNC_ATTR_NONNULL_RET
+{
+  const char *p = str;
+  size_t len = 0;
+  while (*p) {
+    len += strlen(str2special(&p, replace_spaces, replace_lt));
+  }
+
+  char *buf = arena_alloc(arena, len + 1, false);
+  size_t pos = 0;
+  p = str;
+  while (*p) {
+    const char *s = str2special(&p, replace_spaces, replace_lt);
+    size_t s_len = strlen(s);
+    memcpy(buf + pos, s, s_len);
+    pos += s_len;
+  }
+  buf[pos] = NUL;
+  return buf;
+}
+
 /// Convert character, replacing key with printable representation.
 ///
 /// @param[in,out]  sp  String to convert. Is advanced to the next key code.
@@ -1797,14 +1841,14 @@ void str2specialbuf(const char *sp, char *buf, size_t len)
 }
 
 /// print line for :print or :list command
-void msg_prt_line(const char *s, int list)
+void msg_prt_line(const char *s, bool list)
 {
-  int c;
+  schar_T sc;
   int col = 0;
   int n_extra = 0;
-  int c_extra = 0;
-  int c_final = 0;
-  const char *p_extra = NULL;  // init to make SASC shut up
+  schar_T sc_extra = 0;
+  schar_T sc_final = 0;
+  const char *p_extra = NULL;  // init to make SASC shut up. ASCII only!
   int n;
   int attr = 0;
   const char *lead = NULL;
@@ -1846,13 +1890,13 @@ void msg_prt_line(const char *s, int list)
   while (!got_int) {
     if (n_extra > 0) {
       n_extra--;
-      if (n_extra == 0 && c_final) {
-        c = c_final;
-      } else if (c_extra) {
-        c = c_extra;
+      if (n_extra == 0 && sc_final) {
+        sc = sc_final;
+      } else if (sc_extra) {
+        sc = sc_extra;
       } else {
         assert(p_extra != NULL);
-        c = (unsigned char)(*p_extra++);
+        sc = schar_from_ascii((unsigned char)(*p_extra++));
       }
     } else if ((l = utfc_ptr2len(s)) > 1) {
       col += utf_ptr2cells(s);
@@ -1860,10 +1904,8 @@ void msg_prt_line(const char *s, int list)
       if (l >= MB_MAXBYTES) {
         xstrlcpy(buf, "?", sizeof(buf));
       } else if (curwin->w_p_lcs_chars.nbsp != NUL && list
-                 && (utf_ptr2char(s) == 160
-                     || utf_ptr2char(s) == 0x202f)) {
-        int len = utf_char2bytes(curwin->w_p_lcs_chars.nbsp, buf);
-        buf[len] = NUL;
+                 && (utf_ptr2char(s) == 160 || utf_ptr2char(s) == 0x202f)) {
+        schar_get(buf, curwin->w_p_lcs_chars.nbsp);
       } else {
         memmove(buf, s, (size_t)l);
         buf[l] = NUL;
@@ -1873,7 +1915,9 @@ void msg_prt_line(const char *s, int list)
       continue;
     } else {
       attr = 0;
-      c = (uint8_t)(*s++);
+      int c = (uint8_t)(*s++);
+      sc_extra = NUL;
+      sc_final = NUL;
       if (list) {
         in_multispace = c == ' ' && (*s == ' '
                                      || (col > 0 && s[-2] == ' '));
@@ -1883,74 +1927,72 @@ void msg_prt_line(const char *s, int list)
       }
       if (c == TAB && (!list || curwin->w_p_lcs_chars.tab1)) {
         // tab amount depends on current column
-        n_extra = tabstop_padding(col,
-                                  curbuf->b_p_ts,
+        n_extra = tabstop_padding(col, curbuf->b_p_ts,
                                   curbuf->b_p_vts_array) - 1;
         if (!list) {
-          c = ' ';
-          c_extra = ' ';
-          c_final = NUL;
+          sc = schar_from_ascii(' ');
+          sc_extra = schar_from_ascii(' ');
         } else {
-          c = (n_extra == 0 && curwin->w_p_lcs_chars.tab3)
-              ? curwin->w_p_lcs_chars.tab3
-              : curwin->w_p_lcs_chars.tab1;
-          c_extra = curwin->w_p_lcs_chars.tab2;
-          c_final = curwin->w_p_lcs_chars.tab3;
+          sc = (n_extra == 0 && curwin->w_p_lcs_chars.tab3)
+               ? curwin->w_p_lcs_chars.tab3
+               : curwin->w_p_lcs_chars.tab1;
+          sc_extra = curwin->w_p_lcs_chars.tab2;
+          sc_final = curwin->w_p_lcs_chars.tab3;
           attr = HL_ATTR(HLF_0);
         }
-      } else if (c == 160 && list && curwin->w_p_lcs_chars.nbsp != NUL) {
-        c = curwin->w_p_lcs_chars.nbsp;
-        attr = HL_ATTR(HLF_0);
       } else if (c == NUL && list && curwin->w_p_lcs_chars.eol != NUL) {
         p_extra = "";
-        c_extra = NUL;
-        c_final = NUL;
         n_extra = 1;
-        c = curwin->w_p_lcs_chars.eol;
+        sc = curwin->w_p_lcs_chars.eol;
         attr = HL_ATTR(HLF_AT);
         s--;
       } else if (c != NUL && (n = byte2cells(c)) > 1) {
         n_extra = n - 1;
         p_extra = transchar_byte_buf(NULL, c);
-        c_extra = NUL;
-        c_final = NUL;
-        c = (unsigned char)(*p_extra++);
+        sc = schar_from_ascii(*p_extra++);
         // Use special coloring to be able to distinguish <hex> from
         // the same in plain text.
         attr = HL_ATTR(HLF_0);
       } else if (c == ' ') {
         if (lead != NULL && s <= lead && in_multispace
             && curwin->w_p_lcs_chars.leadmultispace != NULL) {
-          c = curwin->w_p_lcs_chars.leadmultispace[multispace_pos++];
+          sc = curwin->w_p_lcs_chars.leadmultispace[multispace_pos++];
           if (curwin->w_p_lcs_chars.leadmultispace[multispace_pos] == NUL) {
             multispace_pos = 0;
           }
           attr = HL_ATTR(HLF_0);
         } else if (lead != NULL && s <= lead && curwin->w_p_lcs_chars.lead != NUL) {
-          c = curwin->w_p_lcs_chars.lead;
+          sc = curwin->w_p_lcs_chars.lead;
           attr = HL_ATTR(HLF_0);
         } else if (trail != NULL && s > trail) {
-          c = curwin->w_p_lcs_chars.trail;
+          sc = curwin->w_p_lcs_chars.trail;
           attr = HL_ATTR(HLF_0);
         } else if (in_multispace
                    && curwin->w_p_lcs_chars.multispace != NULL) {
-          c = curwin->w_p_lcs_chars.multispace[multispace_pos++];
+          sc = curwin->w_p_lcs_chars.multispace[multispace_pos++];
           if (curwin->w_p_lcs_chars.multispace[multispace_pos] == NUL) {
             multispace_pos = 0;
           }
           attr = HL_ATTR(HLF_0);
         } else if (list && curwin->w_p_lcs_chars.space != NUL) {
-          c = curwin->w_p_lcs_chars.space;
+          sc = curwin->w_p_lcs_chars.space;
           attr = HL_ATTR(HLF_0);
+        } else {
+          sc = schar_from_ascii(' ');  // SPACE!
         }
+      } else {
+        sc = schar_from_ascii(c);
       }
     }
 
-    if (c == NUL) {
+    if (sc == NUL) {
       break;
     }
 
-    msg_putchar_attr(c, attr);
+    // TODO(bfredl): this is such baloney. need msg_put_schar
+    char buf[MAX_SCHAR_SIZE];
+    schar_get(buf, sc);
+    msg_puts_attr(buf, attr);
     col++;
   }
   msg_clr_eos();
@@ -2309,7 +2351,7 @@ void msg_scroll_up(bool may_throttle, bool zerocmd)
     msg_grid.dirty_col[msg_grid.rows - 1] = 0;
   }
 
-  grid_fill(&msg_grid_adj, Rows - 1, Rows, 0, Columns, ' ', ' ', HL_ATTR(HLF_MSG));
+  grid_clear(&msg_grid_adj, Rows - 1, Rows, 0, Columns, HL_ATTR(HLF_MSG));
 }
 
 /// Send throttled message output to UI clients
@@ -2353,7 +2395,7 @@ void msg_scroll_flush(void)
     for (int i = MAX(Rows - MAX(delta, 1), 0); i < Rows; i++) {
       int row = i - msg_grid_pos;
       assert(row >= 0);
-      ui_line(&msg_grid, row, 0, msg_grid.dirty_col[row], msg_grid.cols,
+      ui_line(&msg_grid, row, false, 0, msg_grid.dirty_col[row], msg_grid.cols,
               HL_ATTR(HLF_MSG), false);
       msg_grid.dirty_col[row] = 0;
     }
@@ -2410,9 +2452,7 @@ static void inc_msg_scrolled(void)
     xfree(tofree);
   }
   msg_scrolled++;
-  if (must_redraw < UPD_VALID) {
-    must_redraw = UPD_VALID;
-  }
+  set_must_redraw(UPD_VALID);
 }
 
 static msgchunk_T *last_msgchunk = NULL;  // last displayed text
@@ -2523,7 +2563,7 @@ void sb_text_end_cmdline(void)
 /// Clear any text remembered for scrolling back.
 /// When "all" is false keep the last line.
 /// Called when redrawing the screen.
-void clear_sb_text(int all)
+void clear_sb_text(bool all)
 {
   msgchunk_T *mp;
   msgchunk_T **lastp;
@@ -2635,9 +2675,9 @@ static void msg_puts_printf(const char *str, const ptrdiff_t maxlen)
       memcpy(p, s, (size_t)len);
       *(p + len) = '\0';
       if (info_message) {
-        os_msg(buf);
+        printf("%s", buf);
       } else {
-        os_errmsg(buf);
+        fprintf(stderr, "%s", buf);
       }
     }
 
@@ -2824,16 +2864,14 @@ static bool do_more_prompt(int typed_char)
 
           if (toscroll == -1 && !to_redraw) {
             grid_ins_lines(&msg_grid_adj, 0, 1, Rows, 0, Columns);
-            grid_fill(&msg_grid_adj, 0, 1, 0, Columns, ' ', ' ',
-                      HL_ATTR(HLF_MSG));
+            grid_clear(&msg_grid_adj, 0, 1, 0, Columns, HL_ATTR(HLF_MSG));
             // display line at top
-            (void)disp_sb_line(0, mp);
+            disp_sb_line(0, mp);
           } else {
             // redisplay all lines
             // TODO(bfredl): this case is not optimized (though only concerns
             // event fragmentation, not unnecessary scroll events).
-            grid_fill(&msg_grid_adj, 0, Rows, 0, Columns, ' ', ' ',
-                      HL_ATTR(HLF_MSG));
+            grid_clear(&msg_grid_adj, 0, Rows, 0, Columns, HL_ATTR(HLF_MSG));
             for (int i = 0; mp != NULL && i < Rows - 1; i++) {
               mp = disp_sb_line(i, mp);
               msg_scrolled++;
@@ -2859,8 +2897,7 @@ static bool do_more_prompt(int typed_char)
           // scroll up, display line at bottom
           msg_scroll_up(true, false);
           inc_msg_scrolled();
-          grid_fill(&msg_grid_adj, Rows - 2, Rows - 1, 0, Columns, ' ', ' ',
-                    HL_ATTR(HLF_MSG));
+          grid_clear(&msg_grid_adj, Rows - 2, Rows - 1, 0, Columns, HL_ATTR(HLF_MSG));
           mp_last = disp_sb_line(Rows - 2, mp_last);
           toscroll--;
         }
@@ -2868,8 +2905,7 @@ static bool do_more_prompt(int typed_char)
 
       if (toscroll <= 0) {
         // displayed the requested text, more prompt again
-        grid_fill(&msg_grid_adj, Rows - 1, Rows, 0, Columns, ' ', ' ',
-                  HL_ATTR(HLF_MSG));
+        grid_clear(&msg_grid_adj, Rows - 1, Rows, 0, Columns, HL_ATTR(HLF_MSG));
         msg_moremsg(false);
         continue;
       }
@@ -2882,8 +2918,7 @@ static bool do_more_prompt(int typed_char)
   }
 
   // clear the --more-- message
-  grid_fill(&msg_grid_adj, Rows - 1, Rows, 0, Columns, ' ', ' ',
-            HL_ATTR(HLF_MSG));
+  grid_clear(&msg_grid_adj, Rows - 1, Rows, 0, Columns, HL_ATTR(HLF_MSG));
   redraw_cmdline = true;
   clear_cmdline = false;
   mode_displayed = false;
@@ -2899,41 +2934,7 @@ static bool do_more_prompt(int typed_char)
   return retval;
 }
 
-#if defined(MSWIN)
-/// Headless (no UI) error message handler.
-static void do_msg(const char *str, bool errmsg)
-{
-  static bool did_err = false;
-  assert(str != NULL);
-  wchar_t *utf16str;
-  int r = utf8_to_utf16(str, -1, &utf16str);
-  if (r != 0 && !did_err) {
-    did_err = true;
-    fprintf(stderr, "utf8_to_utf16 failed: %d", r);
-    ELOG("utf8_to_utf16 failed: %d", r);
-  } else if (r == 0) {
-    if (errmsg) {
-      fwprintf(stderr, L"%ls", utf16str);
-    } else {
-      wprintf(L"%ls", utf16str);
-    }
-    xfree(utf16str);
-  }
-}
-
-void os_errmsg(const char *str)
-{
-  do_msg(str, true);
-}
-
-/// Headless (no UI) message handler.
-void os_msg(const char *str)
-{
-  do_msg(str, false);
-}
-#endif  // MSWIN
-
-void msg_moremsg(int full)
+void msg_moremsg(bool full)
 {
   int attr = hl_combine_attr(HL_ATTR(HLF_MSG), HL_ATTR(HLF_M));
   grid_line_start(&msg_grid_adj, Rows - 1);
@@ -3001,10 +3002,8 @@ void msg_clr_eos_force(void)
     }
   }
 
-  grid_fill(&msg_grid_adj, msg_row, msg_row + 1, msg_startcol, msg_endcol,
-            ' ', ' ', HL_ATTR(HLF_MSG));
-  grid_fill(&msg_grid_adj, msg_row + 1, Rows, 0, Columns,
-            ' ', ' ', HL_ATTR(HLF_MSG));
+  grid_clear(&msg_grid_adj, msg_row, msg_row + 1, msg_startcol, msg_endcol, HL_ATTR(HLF_MSG));
+  grid_clear(&msg_grid_adj, msg_row + 1, Rows, 0, Columns, HL_ATTR(HLF_MSG));
 
   redraw_cmdline = true;  // overwritten the command line
   if (msg_row < Rows - 1 || msg_col == 0) {
@@ -3025,7 +3024,7 @@ void msg_clr_cmdline(void)
 /// call wait_return() if the message does not fit in the available space
 ///
 /// @return  true if wait_return() not called.
-int msg_end(void)
+bool msg_end(void)
 {
   // If the string is larger than the window,
   // or the ruler option is set and we run into it,
@@ -3053,7 +3052,7 @@ void msg_ext_ui_flush(void)
 
   msg_ext_emit_chunk();
   if (msg_ext_chunks.size > 0) {
-    ui_call_msg_show(cstr_as_string((char *)msg_ext_kind),
+    ui_call_msg_show(cstr_as_string(msg_ext_kind),
                      msg_ext_chunks, msg_ext_overwrite);
     if (!msg_ext_overwrite) {
       msg_ext_visible++;
@@ -3099,9 +3098,7 @@ void msg_ext_clear_later(void)
 {
   if (msg_ext_is_visible()) {
     msg_ext_need_clear = true;
-    if (must_redraw < UPD_VALID) {
-      must_redraw = UPD_VALID;
-    }
+    set_must_redraw(UPD_VALID);
   }
 }
 

@@ -1,6 +1,7 @@
 ---@meta
-
 -- luacheck: no unused args
+
+error('Cannot require a meta file')
 
 ---@defgroup vim.builtin
 ---
@@ -62,6 +63,12 @@
 ---
 ---</pre>
 
+---@class vim.NIL
+
+---@type vim.NIL
+---@nodoc
+vim.NIL = ...
+
 --- Returns true if the code is executing as part of a "fast" event handler,
 --- where most of the API is disabled. These are low-level events (e.g.
 --- |lua-loop-callbacks|) which can be invoked whenever Nvim polls for input.
@@ -76,6 +83,7 @@ function vim.in_fast_event() end
 ---
 --- Note: If numeric keys are present in the table, Nvim ignores the metatable
 --- marker and converts the dict to a list/array anyway.
+--- @return table
 function vim.empty_dict() end
 
 --- Sends {event} to {channel} via |RPC| and returns immediately. If {channel}

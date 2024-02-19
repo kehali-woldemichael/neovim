@@ -111,28 +111,6 @@ error('Cannot require a meta file')
 --- @class vim.api.keyset.exec_opts
 --- @field output? boolean
 
---- @class vim.api.keyset.float_config
---- @field row? number
---- @field col? number
---- @field width? integer
---- @field height? integer
---- @field anchor? string
---- @field relative? string
---- @field win? integer
---- @field bufpos? any[]
---- @field external? boolean
---- @field focusable? boolean
---- @field zindex? integer
---- @field border? any
---- @field title? any
---- @field title_pos? string
---- @field footer? any
---- @field footer_pos? string
---- @field style? string
---- @field noautocmd? boolean
---- @field fixed? boolean
---- @field hide? boolean
-
 --- @class vim.api.keyset.get_autocmds
 --- @field event? any
 --- @field group? any
@@ -192,6 +170,7 @@ error('Cannot require a meta file')
 --- @field fg_indexed? boolean
 --- @field bg_indexed? boolean
 --- @field force? boolean
+--- @field url? string
 
 --- @class vim.api.keyset.highlight_cterm
 --- @field bold? boolean
@@ -246,11 +225,12 @@ error('Cannot require a meta file')
 --- @field end_line? integer
 --- @field end_row? integer
 --- @field end_col? integer
---- @field hl_group? any
+--- @field hl_group? number|string
 --- @field virt_text? any[]
 --- @field virt_text_pos? string
 --- @field virt_text_win_col? integer
 --- @field virt_text_hide? boolean
+--- @field virt_text_repeat_linebreak? boolean
 --- @field hl_eol? boolean
 --- @field hl_mode? string
 --- @field invalidate? boolean
@@ -263,14 +243,16 @@ error('Cannot require a meta file')
 --- @field virt_lines_leftcol? boolean
 --- @field strict? boolean
 --- @field sign_text? string
---- @field sign_hl_group? any
---- @field number_hl_group? any
---- @field line_hl_group? any
---- @field cursorline_hl_group? any
+--- @field sign_hl_group? number|string
+--- @field number_hl_group? number|string
+--- @field line_hl_group? number|string
+--- @field cursorline_hl_group? number|string
 --- @field conceal? string
 --- @field spell? boolean
 --- @field ui_watched? boolean
 --- @field undo_restore? boolean
+--- @field url? string
+--- @field _subpriority? integer
 
 --- @class vim.api.keyset.user_command
 --- @field addr? any
@@ -286,8 +268,46 @@ error('Cannot require a meta file')
 --- @field range? any
 --- @field register? boolean
 
+--- @class vim.api.keyset.win_config
+--- @field row? number
+--- @field col? number
+--- @field width? integer
+--- @field height? integer
+--- @field anchor? string
+--- @field relative? string
+--- @field split? string
+--- @field win? integer
+--- @field bufpos? any[]
+--- @field external? boolean
+--- @field focusable? boolean
+--- @field vertical? boolean
+--- @field zindex? integer
+--- @field border? any
+--- @field title? any
+--- @field title_pos? string
+--- @field footer? any
+--- @field footer_pos? string
+--- @field style? string
+--- @field noautocmd? boolean
+--- @field fixed? boolean
+--- @field hide? boolean
+
 --- @class vim.api.keyset.win_text_height
 --- @field start_row? integer
 --- @field end_row? integer
 --- @field start_vcol? integer
 --- @field end_vcol? integer
+
+--- @class vim.api.keyset.xdl_diff
+--- @field on_hunk? function
+--- @field result_type? string
+--- @field algorithm? string
+--- @field ctxlen? integer
+--- @field interhunkctxlen? integer
+--- @field linematch? any
+--- @field ignore_whitespace? boolean
+--- @field ignore_whitespace_change? boolean
+--- @field ignore_whitespace_change_at_eol? boolean
+--- @field ignore_cr_at_eol? boolean
+--- @field ignore_blank_lines? boolean
+--- @field indent_heuristic? boolean

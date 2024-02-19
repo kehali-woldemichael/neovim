@@ -33,10 +33,16 @@ include(InstallHelpers)
 include(PreventInTreeBuilds)
 include(Util)
 
+#-------------------------------------------------------------------------------
+# Variables
+#-------------------------------------------------------------------------------
+set(FUNCS_DATA ${PROJECT_BINARY_DIR}/funcs_data.mpack)
+set(TOUCHES_DIR ${PROJECT_BINARY_DIR}/touches)
+
+file(GLOB DOCFILES CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/runtime/doc/*.txt)
+
 set_directory_properties(PROPERTIES
   EP_PREFIX "${DEPS_BUILD_DIR}")
-
-set(TOUCHES_DIR ${PROJECT_BINARY_DIR}/touches)
 
 find_program(CCACHE_PRG ccache)
 if(CCACHE_PRG)
@@ -49,6 +55,12 @@ endif()
 
 if(${CMAKE_VERSION} VERSION_LESS 3.20)
   set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+endif()
+
+if(${CMAKE_VERSION} VERSION_GREATER_EQUAL 3.26)
+  set(COPY_DIRECTORY copy_directory_if_different)
+else()
+  set(COPY_DIRECTORY copy_directory)
 endif()
 
 # Prefer our bundled versions of dependencies.
@@ -113,10 +125,11 @@ if (MINGW)
 else()
   option(ENABLE_LTO "enable link time optimization" ON)
 endif()
+option(ENABLE_LIBINTL "enable libintl" ON)
 
 message(STATUS "CMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}")
 
-set_default_buildtype()
+set_default_buildtype(Debug)
 get_property(isMultiConfig GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 if(NOT isMultiConfig)
   # Unlike build dependencies in cmake.deps, we assume we want dev dependencies
@@ -217,22 +230,24 @@ endif()
 find_program(SHELLCHECK_PRG shellcheck ${LINT_REQUIRED})
 find_program(STYLUA_PRG stylua ${LINT_REQUIRED})
 
+set(STYLUA_DIRS runtime scripts src test contrib)
+
 add_glob_target(
   TARGET lintlua-luacheck
-  COMMAND $<TARGET_FILE:nvim>
+  COMMAND $<TARGET_FILE:nvim_bin>
   FLAGS -ll ${PROJECT_SOURCE_DIR}/test/lua_runner.lua ${CMAKE_BINARY_DIR}/usr luacheck -q
-  GLOB_DIRS runtime/ scripts/ src/ test/
+  GLOB_DIRS runtime scripts src test
   GLOB_PAT *.lua
-  TOUCH_STRATEGY SINGLE)
+  TOUCH_STRATEGY PER_DIR)
 add_dependencies(lintlua-luacheck lua-dev-deps)
 
 add_glob_target(
   TARGET lintlua-stylua
   COMMAND ${STYLUA_PRG}
   FLAGS --color=always --check --respect-ignores
-  GLOB_DIRS runtime/ scripts/ src/ test/unit/
+  GLOB_DIRS ${STYLUA_DIRS}
   GLOB_PAT *.lua
-  TOUCH_STRATEGY SINGLE)
+  TOUCH_STRATEGY PER_DIR)
 
 add_custom_target(lintlua)
 add_dependencies(lintlua lintlua-luacheck lintlua-stylua)
@@ -243,22 +258,23 @@ add_glob_target(
   FLAGS -x -a
   GLOB_DIRS scripts
   GLOB_PAT *.sh
-  TOUCH_STRATEGY SINGLE)
+  TOUCH_STRATEGY PER_DIR)
 
 add_custom_target(lintcommit
-  COMMAND $<TARGET_FILE:nvim> -u NONE -l ${PROJECT_SOURCE_DIR}/scripts/lintcommit.lua main)
-add_dependencies(lintcommit nvim)
+  COMMAND $<TARGET_FILE:nvim_bin> -u NONE -l ${PROJECT_SOURCE_DIR}/scripts/lintcommit.lua main)
+add_dependencies(lintcommit nvim_bin)
 
 add_custom_target(lint)
-add_dependencies(lint lintc lintlua lintsh lintcommit)
+add_dependencies(lint lintc lintlua lintsh lintcommit lintdoc)
 
 # Format
 add_glob_target(
   TARGET formatlua
   COMMAND ${STYLUA_PRG}
   FLAGS --respect-ignores
-  GLOB_DIRS runtime/ scripts/ src/ test/unit/
-  GLOB_PAT *.lua)
+  GLOB_DIRS ${STYLUA_DIRS}
+  GLOB_PAT *.lua
+  TOUCH_STRATEGY PER_DIR)
 
 add_custom_target(format)
 add_dependencies(format formatc formatlua)
@@ -266,6 +282,9 @@ add_dependencies(format formatc formatlua)
 install_helper(
   FILES ${CMAKE_SOURCE_DIR}/src/man/nvim.1
   DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
+
+add_custom_target(nvim ALL)
+add_dependencies(nvim nvim_bin nvim_runtime_deps nvim_runtime)
 
 add_subdirectory(src/nvim)
 add_subdirectory(cmake.config)

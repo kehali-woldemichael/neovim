@@ -14,6 +14,7 @@
 #include "nvim/api/private/helpers.h"
 #include "nvim/api/ui.h"
 #include "nvim/channel.h"
+#include "nvim/channel_defs.h"
 #include "nvim/event/defs.h"
 #include "nvim/event/loop.h"
 #include "nvim/event/multiqueue.h"
@@ -32,6 +33,7 @@
 #include "nvim/msgpack_rpc/unpacker.h"
 #include "nvim/os/input.h"
 #include "nvim/rbuffer.h"
+#include "nvim/rbuffer_defs.h"
 #include "nvim/types_defs.h"
 #include "nvim/ui.h"
 #include "nvim/ui_client.h"
@@ -190,7 +192,6 @@ Object rpc_send_call(uint64_t id, const char *method_name, Array args, ArenaMem 
 
   if (!(channel = find_rpc_channel(id))) {
     api_set_error(err, kErrorTypeException, "Invalid channel: %" PRIu64, id);
-    api_free_array(args);
     return NIL;
   }
 
@@ -199,7 +200,6 @@ Object rpc_send_call(uint64_t id, const char *method_name, Array args, ArenaMem 
   uint32_t request_id = rpc->next_request_id++;
   // Send the msgpack-rpc request
   send_request(channel, request_id, method_name, args);
-  api_free_array(args);
 
   // Push the frame
   ChannelCallFrame frame = { request_id, false, false, NIL, NULL };
@@ -302,8 +302,11 @@ static void receive_msgpack(Stream *stream, RBuffer *rbuf, size_t c, void *data,
   p->read_ptr = rbuffer_read_ptr(rbuf, &size);
   p->read_size = size;
   parse_msgpack(channel);
-  size_t consumed = size - p->read_size;
-  rbuffer_consumed_compact(rbuf, consumed);
+
+  if (!unpacker_closed(p)) {
+    size_t consumed = size - p->read_size;
+    rbuffer_consumed_compact(rbuf, consumed);
+  }
 
 end:
   channel_decref(channel);
@@ -446,7 +449,7 @@ static void request_event(void **argv)
                                               e->type,
                                               e->request_id,
                                               &error,
-                                              result,
+                                              &result,
                                               &out_buffer));
   }
   if (!handler.arena_return) {
@@ -535,14 +538,14 @@ static void send_error(Channel *chan, MsgpackRpcRequestHandler handler, MessageT
                                          type,
                                          id,
                                          &e,
-                                         NIL,
+                                         &NIL,
                                          &out_buffer));
   api_clear_error(&e);
 }
 
 static void send_request(Channel *channel, uint32_t id, const char *name, Array args)
 {
-  const String method = cstr_as_string((char *)name);
+  const String method = cstr_as_string(name);
   channel_write(channel, serialize_request(channel->id,
                                            id,
                                            method,
@@ -553,7 +556,7 @@ static void send_request(Channel *channel, uint32_t id, const char *name, Array 
 
 static void send_event(Channel *channel, const char *name, Array args)
 {
-  const String method = cstr_as_string((char *)name);
+  const String method = cstr_as_string(name);
   channel_write(channel, serialize_request(channel->id,
                                            0,
                                            method,
@@ -578,7 +581,7 @@ static void broadcast_event(const char *name, Array args)
     goto end;
   }
 
-  const String method = cstr_as_string((char *)name);
+  const String method = cstr_as_string(name);
   WBuffer *buffer = serialize_request(0,
                                       0,
                                       method,
@@ -666,7 +669,7 @@ static WBuffer *serialize_request(uint64_t channel_id, uint32_t request_id, cons
 }
 
 static WBuffer *serialize_response(uint64_t channel_id, MsgpackRpcRequestHandler handler,
-                                   MessageType type, uint32_t response_id, Error *err, Object arg,
+                                   MessageType type, uint32_t response_id, Error *err, Object *arg,
                                    msgpack_sbuffer *sbuffer)
 {
   msgpack_packer pac;
@@ -679,12 +682,11 @@ static WBuffer *serialize_response(uint64_t channel_id, MsgpackRpcRequestHandler
       semsg("paste: %s", err->msg);
       api_clear_error(err);
     } else {
-      Array args = ARRAY_DICT_INIT;
-      ADD(args, INTEGER_OBJ(err->type));
-      ADD(args, CSTR_TO_OBJ(err->msg));
+      MAXSIZE_TEMP_ARRAY(args, 2);
+      ADD_C(args, INTEGER_OBJ(err->type));
+      ADD_C(args, CSTR_AS_OBJ(err->msg));
       msgpack_rpc_serialize_request(0, cstr_as_string("nvim_error_event"),
                                     args, &pac);
-      api_free_array(args);
     }
   } else {
     msgpack_rpc_serialize_response(response_id, err, arg, &pac);

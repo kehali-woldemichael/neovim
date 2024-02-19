@@ -9,43 +9,36 @@
 ---@diagnostic disable-next-line: lowercase-global
 vim = vim or {}
 
-local function _id(v)
-  return v
-end
-
-local deepcopy
-
-local deepcopy_funcs = {
-  table = function(orig, cache)
-    if cache[orig] then
-      return cache[orig]
-    end
-    local copy = {}
-
-    cache[orig] = copy
-    local mt = getmetatable(orig)
-    for k, v in pairs(orig) do
-      copy[deepcopy(k, cache)] = deepcopy(v, cache)
-    end
-    return setmetatable(copy, mt)
-  end,
-  number = _id,
-  string = _id,
-  ['nil'] = _id,
-  boolean = _id,
-  ['function'] = _id,
-}
-
-deepcopy = function(orig, _cache)
-  local f = deepcopy_funcs[type(orig)]
-  if f then
-    return f(orig, _cache or {})
-  else
-    if type(orig) == 'userdata' and orig == vim.NIL then
-      return vim.NIL
-    end
+---@generic T
+---@param orig T
+---@param cache? table<any,any>
+---@return T
+local function deepcopy(orig, cache)
+  if orig == vim.NIL then
+    return vim.NIL
+  elseif type(orig) == 'userdata' or type(orig) == 'thread' then
     error('Cannot deepcopy object of type ' .. type(orig))
+  elseif type(orig) ~= 'table' then
+    return orig
   end
+
+  --- @cast orig table<any,any>
+
+  if cache and cache[orig] then
+    return cache[orig]
+  end
+
+  local copy = {} --- @type table<any,any>
+
+  if cache then
+    cache[orig] = copy
+  end
+
+  for k, v in pairs(orig) do
+    copy[deepcopy(k, cache)] = deepcopy(v, cache)
+  end
+
+  return setmetatable(copy, getmetatable(orig))
 end
 
 --- Returns a deep copy of the given object. Non-table objects are copied as
@@ -54,12 +47,25 @@ end
 --- same functions as those in the input table. Userdata and threads are not
 --- copied and will throw an error.
 ---
+--- Note: `noref=true` is much more performant on tables with unique table
+--- fields, while `noref=false` is more performant on tables that reuse table
+--- fields.
+---
 ---@generic T: table
 ---@param orig T Table to copy
+---@param noref? boolean
+--- When `false` (default) a contained table is only copied once and all
+--- references point to this single copy. When `true` every occurrence of a
+--- table results in a new copy. This also means that a cyclic reference can
+--- cause `deepcopy()` to fail.
 ---@return T Table of copied keys and (nested) values.
-function vim.deepcopy(orig)
-  return deepcopy(orig)
+function vim.deepcopy(orig, noref)
+  return deepcopy(orig, not noref and {} or nil)
 end
+
+--- @class vim.gsplit.Opts
+--- @field plain? boolean Use `sep` literally (as in string.find).
+--- @field trimempty? boolean Discard empty segments at start and end of the sequence.
 
 --- Gets an |iterator| that splits a string at each instance of a separator, in "lazy" fashion
 --- (as opposed to |vim.split()| which is "eager").
@@ -89,12 +95,12 @@ end
 ---
 --- @param s string String to split
 --- @param sep string Separator or pattern
---- @param opts (table|nil) Keyword arguments |kwargs|:
+--- @param opts? vim.gsplit.Opts (table) Keyword arguments |kwargs|:
 ---       - plain: (boolean) Use `sep` literally (as in string.find).
 ---       - trimempty: (boolean) Discard empty segments at start and end of the sequence.
 ---@return fun():string|nil (function) Iterator over the split components
 function vim.gsplit(s, sep, opts)
-  local plain
+  local plain --- @type boolean?
   local trimempty = false
   if type(opts) == 'boolean' then
     plain = opts -- For backwards compatibility.
@@ -111,6 +117,11 @@ function vim.gsplit(s, sep, opts)
   local segs = {}
   local empty_start = true -- Only empty segments seen so far.
 
+  --- @param i integer?
+  --- @param j integer
+  --- @param ... unknown
+  --- @return string
+  --- @return ...
   local function _pass(i, j, ...)
     if i then
       assert(j + 1 > start, 'Infinite loop detected')
@@ -199,10 +210,11 @@ end
 ---@param t table<T, any> (table) Table
 ---@return T[] (list) List of keys
 function vim.tbl_keys(t)
-  assert(type(t) == 'table', string.format('Expected table, got %s', type(t)))
+  vim.validate({ t = { t, 't' } })
+  --- @cast t table<any,any>
 
   local keys = {}
-  for k, _ in pairs(t) do
+  for k in pairs(t) do
     table.insert(keys, k)
   end
   return keys
@@ -215,10 +227,12 @@ end
 ---@param t table<any, T> (table) Table
 ---@return T[] (list) List of values
 function vim.tbl_values(t)
-  assert(type(t) == 'table', string.format('Expected table, got %s', type(t)))
+  vim.validate({ t = { t, 't' } })
 
   local values = {}
-  for _, v in pairs(t) do
+  for _, v in
+    pairs(t --[[@as table<any,any>]])
+  do
     table.insert(values, v)
   end
   return values
@@ -232,8 +246,9 @@ end
 ---@return table Table of transformed values
 function vim.tbl_map(func, t)
   vim.validate({ func = { func, 'c' }, t = { t, 't' } })
+  --- @cast t table<any,any>
 
-  local rettab = {}
+  local rettab = {} --- @type table<any,any>
   for k, v in pairs(t) do
     rettab[k] = func(v)
   end
@@ -248,15 +263,19 @@ end
 ---@return T[] (table) Table of filtered values
 function vim.tbl_filter(func, t)
   vim.validate({ func = { func, 'c' }, t = { t, 't' } })
+  --- @cast t table<any,any>
 
-  local rettab = {}
+  local rettab = {} --- @type table<any,any>
   for _, entry in pairs(t) do
     if func(entry) then
-      table.insert(rettab, entry)
+      rettab[#rettab + 1] = entry
     end
   end
   return rettab
 end
+
+--- @class vim.tbl_contains.Opts
+--- @field predicate? boolean
 
 --- Checks if a table contains a given value, specified either directly or via
 --- a predicate that is checked for each value.
@@ -274,13 +293,14 @@ end
 ---
 ---@param t table Table to check
 ---@param value any Value to compare or predicate function reference
----@param opts (table|nil) Keyword arguments |kwargs|:
+---@param opts? vim.tbl_contains.Opts (table) Keyword arguments |kwargs|:
 ---       - predicate: (boolean) `value` is a function reference to be checked (default false)
 ---@return boolean `true` if `t` contains `value`
 function vim.tbl_contains(t, value, opts)
   vim.validate({ t = { t, 't' }, opts = { opts, 't', true } })
+  --- @cast t table<any,any>
 
-  local pred
+  local pred --- @type fun(v: any): boolean?
   if opts and opts.predicate then
     vim.validate({ value = { value, 'c' } })
     pred = value
@@ -307,6 +327,7 @@ end
 ---@return boolean `true` if `t` contains `value`
 function vim.list_contains(t, value)
   vim.validate({ t = { t, 't' } })
+  --- @cast t table<any,any>
 
   for _, v in ipairs(t) do
     if v == value then
@@ -323,7 +344,7 @@ end
 ---@param t table Table to check
 ---@return boolean `true` if `t` is empty
 function vim.tbl_isempty(t)
-  assert(type(t) == 'table', string.format('Expected table, got %s', type(t)))
+  vim.validate({ t = { t, 't' } })
   return next(t) == nil
 end
 
@@ -345,7 +366,7 @@ local function tbl_extend(behavior, deep_extend, ...)
     )
   end
 
-  local ret = {}
+  local ret = {} --- @type table<any,any>
   if vim._empty_dict_mt ~= nil and getmetatable(select(1, ...)) == vim._empty_dict_mt then
     ret = vim.empty_dict()
   end
@@ -353,6 +374,7 @@ local function tbl_extend(behavior, deep_extend, ...)
   for i = 1, select('#', ...) do
     local tbl = select(i, ...)
     vim.validate({ ['after the second argument'] = { tbl, 't' } })
+    --- @cast tbl table<any,any>
     if tbl then
       for k, v in pairs(tbl) do
         if deep_extend and can_merge(v) and can_merge(ret[k]) then
@@ -415,12 +437,14 @@ function vim.deep_equal(a, b)
     return false
   end
   if type(a) == 'table' then
+    --- @cast a table<any,any>
+    --- @cast b table<any,any>
     for k, v in pairs(a) do
       if not vim.deep_equal(v, b[k]) then
         return false
       end
     end
-    for k, _ in pairs(b) do
+    for k in pairs(b) do
       if a[k] == nil then
         return false
       end
@@ -438,6 +462,8 @@ end
 ---@param o table Table to add the reverse to
 ---@return table o
 function vim.tbl_add_reverse_lookup(o)
+  --- @cast o table<any,any>
+  --- @type any[]
   local keys = vim.tbl_keys(o)
   for _, k in ipairs(keys) do
     local v = o[k]
@@ -467,7 +493,6 @@ end
 ---
 ---@param o table Table to index
 ---@param ... any Optional keys (0 or more, variadic) via which to index the table
----
 ---@return any Nested value indexed by key (if it exists), else nil
 function vim.tbl_get(o, ...)
   local keys = { ... }
@@ -475,7 +500,7 @@ function vim.tbl_get(o, ...)
     return nil
   end
   for i, k in ipairs(keys) do
-    o = o[k]
+    o = o[k] --- @type any
     if o == nil then
       return nil
     elseif type(o) ~= 'table' and next(keys, i) then
@@ -519,6 +544,7 @@ end
 ---@return table Flattened copy of the given list-like table
 function vim.tbl_flatten(t)
   local result = {}
+  --- @param _t table<any,any>
   local function _tbl_flatten(_t)
     local n = #_t
     for i = 1, n do
@@ -541,7 +567,8 @@ end
 ---@param t table Dict-like table
 ---@return function # |for-in| iterator over sorted keys and their values
 function vim.spairs(t)
-  assert(type(t) == 'table', string.format('Expected table, got %s', type(t)))
+  vim.validate({ t = { t, 't' } })
+  --- @cast t table<any,any>
 
   -- collect the keys
   local keys = {}
@@ -576,10 +603,12 @@ function vim.tbl_isarray(t)
     return false
   end
 
+  --- @cast t table<any,any>
+
   local count = 0
 
   for k, _ in pairs(t) do
-    --- Check if the number k is an integer
+    -- Check if the number k is an integer
     if type(k) == 'number' and k == math.floor(k) then
       count = count + 1
     else
@@ -617,11 +646,6 @@ function vim.tbl_islist(t)
   local num_elem = vim.tbl_count(t)
 
   if num_elem == 0 then
-    -- TODO(bfredl): in the future, we will always be inside nvim
-    -- then this check can be deleted.
-    if vim._empty_dict_mt == nil then
-      return nil
-    end
     return getmetatable(t) ~= vim._empty_dict_mt
   else
     for i = 1, num_elem do
@@ -645,6 +669,7 @@ end
 ---@return integer Number of non-nil values in table
 function vim.tbl_count(t)
   vim.validate({ t = { t, 't' } })
+  --- @cast t table<any,any>
 
   local count = 0
   for _ in pairs(t) do
@@ -661,7 +686,7 @@ end
 ---@param finish integer|nil End range of slice
 ---@return T[] (list) Copy of table sliced from start to finish (inclusive)
 function vim.list_slice(list, start, finish)
-  local new_list = {}
+  local new_list = {} --- @type `T`[]
   for i = start or 1, finish or #list do
     new_list[#new_list + 1] = list[i]
   end
@@ -710,6 +735,16 @@ function vim.endswith(s, suffix)
 end
 
 do
+  --- @alias vim.validate.Type
+  --- | 't' | 'table'
+  --- | 's' | 'string'
+  --- | 'n' | 'number'
+  --- | 'f' | 'function'
+  --- | 'c' | 'callable'
+  --- | 'nil'
+  --- | 'thread'
+  --- | 'userdata
+
   local type_names = {
     ['table'] = 'table',
     t = 'table',
@@ -728,10 +763,17 @@ do
     ['userdata'] = 'userdata',
   }
 
+  --- @class vim.validate.Spec {[1]: any, [2]: string|string[], [3]: boolean }
+  --- @field [1] any Argument value
+  --- @field [2] string|string[]|fun(v:any):boolean, string? Type name, or callable
+  --- @field [3]? boolean
+
   local function _is_type(val, t)
     return type(val) == t or (t == 'callable' and vim.is_callable(val))
   end
 
+  --- @param opt table<vim.validate.Type,vim.validate.Spec>
+  --- @return boolean, string?
   local function is_valid(opt)
     if type(opt) ~= 'table' then
       return false, string.format('opt: expected table, got %s', type(opt))
@@ -790,7 +832,7 @@ do
       end
     end
 
-    return true, nil
+    return true
   end
 
   --- Validates a parameter specification (types and values).
@@ -832,7 +874,7 @@ do
   ---
   --- ```
   ---
-  ---@param opt table Names of parameters to validate. Each key is a parameter
+  ---@param opt table<vim.validate.Type,vim.validate.Spec> (table) Names of parameters to validate. Each key is a parameter
   ---          name; each value is a tuple in one of these forms:
   ---          1. (arg_value, type_name, optional)
   ---             - arg_value: argument value
@@ -878,7 +920,7 @@ end
 --- a.b.c = 1
 --- ```
 ---
----@param createfn function?(key:any):any Provides the value for a missing `key`.
+---@param createfn? fun(key:any):any Provides the value for a missing `key`.
 ---@return table # Empty table with `__index` metamethod.
 function vim.defaulttable(createfn)
   createfn = createfn or function(_)
@@ -898,6 +940,7 @@ do
   ---@field private _idx_read integer
   ---@field private _idx_write integer
   ---@field private _size integer
+  ---@overload fun(self): table?
   local Ringbuf = {}
 
   --- Clear all items
@@ -984,6 +1027,26 @@ do
       end,
     })
   end
+end
+
+--- @private
+--- @generic T
+--- @param root string
+--- @param mod T
+--- @return T
+function vim._defer_require(root, mod)
+  return setmetatable({}, {
+    ---@param t table<string, any>
+    ---@param k string
+    __index = function(t, k)
+      if not mod[k] then
+        return
+      end
+      local name = string.format('%s.%s', root, k)
+      t[k] = require(name)
+      return t[k]
+    end,
+  })
 end
 
 return vim

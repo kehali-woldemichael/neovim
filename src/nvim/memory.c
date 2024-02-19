@@ -13,13 +13,14 @@
 #include "nvim/api/ui.h"
 #include "nvim/arglist.h"
 #include "nvim/ascii_defs.h"
+#include "nvim/buffer_defs.h"
 #include "nvim/buffer_updates.h"
 #include "nvim/channel.h"
 #include "nvim/context.h"
 #include "nvim/decoration_provider.h"
 #include "nvim/drawline.h"
 #include "nvim/eval.h"
-#include "nvim/gettext.h"
+#include "nvim/gettext_defs.h"
 #include "nvim/globals.h"
 #include "nvim/highlight.h"
 #include "nvim/highlight_group.h"
@@ -721,13 +722,6 @@ void free_all_mem(void)
   p_ea = false;
   if (first_tabpage->tp_next != NULL) {
     do_cmdline_cmd("tabonly!");
-  }
-
-  if (!ONE_WINDOW) {
-    // to keep things simple, don't perform this
-    // ritual inside a float
-    curwin = firstwin;
-    do_cmdline_cmd("only!");
   }
 
   // Free all spell info.

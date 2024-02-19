@@ -4,7 +4,8 @@ local exec_lua = helpers.exec_lua
 local eq = helpers.eq
 
 local function system_sync(cmd, opts)
-  return exec_lua([[
+  return exec_lua(
+    [[
     local cmd, opts = ...
     local obj = vim.system(...)
 
@@ -21,11 +22,15 @@ local function system_sync(cmd, opts)
     assert(not proc, 'process still exists')
 
     return res
-  ]], cmd, opts)
+  ]],
+    cmd,
+    opts
+  )
 end
 
 local function system_async(cmd, opts)
-  return exec_lua([[
+  return exec_lua(
+    [[
     local cmd, opts = ...
     _G.done = false
     local obj = vim.system(cmd, opts, function(obj)
@@ -44,7 +49,10 @@ local function system_async(cmd, opts)
     assert(not proc, 'process still exists')
 
     return _G.ret
-  ]], cmd, opts)
+  ]],
+    cmd,
+    opts
+  )
 end
 
 describe('vim.system', function()
@@ -52,10 +60,10 @@ describe('vim.system', function()
     clear()
   end)
 
-  for name, system in pairs{ sync = system_sync, async = system_async, } do
-    describe('('..name..')', function()
+  for name, system in pairs { sync = system_sync, async = system_async } do
+    describe('(' .. name .. ')', function()
       it('can run simple commands', function()
-        eq('hello\n', system({'echo', 'hello' }, { text = true }).stdout)
+        eq('hello\n', system({ 'echo', 'hello' }, { text = true }).stdout)
       end)
 
       it('handle input', function()
@@ -67,7 +75,7 @@ describe('vim.system', function()
           code = 124,
           signal = 15,
           stdout = '',
-          stderr = ''
+          stderr = '',
         }, system({ 'sleep', '10' }, { timeout = 1000 }))
       end)
     end)
@@ -97,4 +105,17 @@ describe('vim.system', function()
     ]])
   end)
 
+  it('SystemObj:wait() does not process non-fast events #27292', function()
+    eq(
+      false,
+      exec_lua([[
+        _G.processed = false
+        local cmd = vim.system({ 'sleep', '1' })
+        vim.schedule(function() _G.processed = true end)
+        cmd:wait()
+        return _G.processed
+      ]])
+    )
+    eq(true, exec_lua([[return _G.processed]]))
+  end)
 end)

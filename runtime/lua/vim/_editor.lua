@@ -95,7 +95,7 @@ vim.log = {
 --- throws an error if {cmd} cannot be run.
 ---
 --- @param cmd (string[]) Command to execute
---- @param opts (SystemOpts|nil) Options:
+--- @param opts vim.SystemOpts? Options:
 ---   - cwd: (string) Set the current working directory for the sub-process.
 ---   - env: table<string,string> Set environment variables for the new process. Inherits the
 ---     current environment with `NVIM` set to |v:servername|.
@@ -118,7 +118,7 @@ vim.log = {
 ---     parent exits. Note that the child process will still keep the parent's event loop alive
 ---     unless the parent process calls |uv.unref()| on the child's process handle.
 ---
---- @param on_exit (function|nil) Called when subprocess exits. When provided, the command runs
+--- @param on_exit? fun(out: vim.SystemCompleted) Called when subprocess exits. When provided, the command runs
 ---   asynchronously. Receives SystemCompleted object, see return of SystemObj:wait().
 ---
 --- @return vim.SystemObj Object with the fields:
@@ -156,10 +156,10 @@ function vim._os_proc_info(pid)
   elseif r.code ~= 0 then
     error('command failed: ' .. vim.fn.string(cmd))
   end
-  local ppid = assert(vim.system({ 'ps', '-p', pid, '-o', 'ppid=' }):wait().stdout)
+  local ppid_string = assert(vim.system({ 'ps', '-p', pid, '-o', 'ppid=' }):wait().stdout)
   -- Remove trailing whitespace.
   name = vim.trim(name):gsub('^.*/', '')
-  ppid = tonumber(ppid) or -1
+  local ppid = tonumber(ppid_string) or -1
   return {
     name = name,
     pid = pid,
@@ -190,12 +190,18 @@ function vim._os_proc_children(ppid)
   return children
 end
 
+--- @class vim.inspect.Opts
+--- @field depth? integer
+--- @field newline? string
+--- @field process? fun(item:any, path: string[]): any
+
 --- Gets a human-readable representation of the given object.
 ---
 ---@see |vim.print()|
 ---@see https://github.com/kikito/inspect.lua
 ---@see https://github.com/mpeterv/vinspect
 ---@return string
+---@overload fun(x: any, opts?: vim.inspect.Opts): string
 vim.inspect = vim.inspect
 
 do
@@ -219,10 +225,9 @@ do
   --- ```
   ---
   ---@see |paste|
-  ---@alias paste_phase -1 | 1 | 2 | 3
   ---
   ---@param lines  string[] # |readfile()|-style list of lines to paste. |channel-lines|
-  ---@param phase paste_phase  -1: "non-streaming" paste: the call contains all lines.
+  ---@param phase (-1|1|2|3)  -1: "non-streaming" paste: the call contains all lines.
   ---              If paste is "streamed", `phase` indicates the stream state:
   ---                - 1: starts the paste (exactly once)
   ---                - 2: continues the paste (zero or more times)
@@ -347,7 +352,7 @@ function vim.schedule_wrap(fn)
 end
 
 -- vim.fn.{func}(...)
----@private
+---@nodoc
 vim.fn = setmetatable({}, {
   __index = function(t, key)
     local _fn
@@ -533,20 +538,21 @@ function vim.region(bufnr, pos1, pos2, regtype, inclusive)
 
   local region = {}
   for l = pos1[1], pos2[1] do
-    local c1, c2
+    local c1 --- @type number
+    local c2 --- @type number
     if regtype:byte() == 22 then -- block selection: take width from regtype
       c1 = pos1[2]
-      c2 = c1 + regtype:sub(2)
+      c2 = c1 + tonumber(regtype:sub(2))
       -- and adjust for non-ASCII characters
       local bufline = vim.api.nvim_buf_get_lines(bufnr, l, l + 1, true)[1]
       local utflen = vim.str_utfindex(bufline, #bufline)
       if c1 <= utflen then
-        c1 = vim.str_byteindex(bufline, c1)
+        c1 = assert(tonumber(vim.str_byteindex(bufline, c1)))
       else
         c1 = #bufline + 1
       end
       if c2 <= utflen then
-        c2 = vim.str_byteindex(bufline, c2)
+        c2 = assert(tonumber(vim.str_byteindex(bufline, c2)))
       else
         c2 = #bufline + 1
       end
@@ -576,7 +582,7 @@ end
 ---@return table timer luv timer object
 function vim.defer_fn(fn, timeout)
   vim.validate({ fn = { fn, 'c', true } })
-  local timer = vim.uv.new_timer()
+  local timer = assert(vim.uv.new_timer())
   timer:start(
     timeout,
     0,
@@ -601,6 +607,7 @@ end
 ---@param msg string Content of the notification to show to the user.
 ---@param level integer|nil One of the values from |vim.log.levels|.
 ---@param opts table|nil Optional parameters. Unused by default.
+---@diagnostic disable-next-line: unused-local
 function vim.notify(msg, level, opts) -- luacheck: no unused args
   if level == vim.log.levels.ERROR then
     vim.api.nvim_err_writeln(msg)
@@ -645,8 +652,9 @@ local on_key_cbs = {}
 ---@note {fn} will not be cleared by |nvim_buf_clear_namespace()|
 ---@note {fn} will receive the keys after mappings have been evaluated
 ---
----@param fn fun(key: string) Function invoked on every key press. |i_CTRL-V|
----                   Returning nil removes the callback associated with namespace {ns_id}.
+---@param fn fun(key: string)? Function invoked on every key press. |i_CTRL-V|
+---                   Passing in nil when {ns_id} is specified removes the
+---                   callback associated with namespace {ns_id}.
 ---@param ns_id integer? Namespace ID. If nil or 0, generates and returns a
 ---                     new |nvim_create_namespace()| id.
 ---
@@ -700,6 +708,8 @@ end
 ---
 ---     1. Can we get it to just return things in the global namespace with that name prefix
 ---     2. Can we get it to return things from global namespace even with `print(` in front.
+---
+--- @param pat string
 function vim._expand_pat(pat, env)
   env = env or _G
 
@@ -801,11 +811,13 @@ function vim._expand_pat(pat, env)
   return keys, #prefix_match_pat
 end
 
+--- @param lua_string string
 vim._expand_pat_get_parts = function(lua_string)
   local parts = {}
 
   local accumulator, search_index = '', 1
-  local in_brackets, bracket_end = false, -1
+  local in_brackets = false
+  local bracket_end = -1 --- @type integer?
   local string_char = nil
   for idx = 1, #lua_string do
     local s = lua_string:sub(idx, idx)
@@ -888,7 +900,7 @@ end
 
 ---@private
 function vim.pretty_print(...)
-  vim.deprecate('vim.pretty_print', 'vim.print', '0.10')
+  vim.deprecate('vim.pretty_print()', 'vim.print()', '0.10')
   return vim.print(...)
 end
 
@@ -938,9 +950,12 @@ function vim.keycode(str)
   return vim.api.nvim_replace_termcodes(str, true, true, true)
 end
 
+--- @param server_addr string
+--- @param connect_error string
 function vim._cs_remote(rcid, server_addr, connect_error, args)
+  --- @return string
   local function connection_failure_errmsg(consequence)
-    local explanation
+    local explanation --- @type string
     if server_addr == '' then
       explanation = 'No server specified with --server'
     else
@@ -983,7 +998,7 @@ function vim._cs_remote(rcid, server_addr, connect_error, args)
     local res = tostring(vim.rpcrequest(rcid, 'nvim_eval', args[2]))
     return { result = res, should_exit = true, tabbed = false }
   elseif subcmd ~= '' then
-    return { errmsg = 'Unknown option argument: ' .. args[1] }
+    return { errmsg = 'Unknown option argument: ' .. tostring(args[1]) }
   end
 
   if rcid == 0 then
@@ -1019,9 +1034,44 @@ end
 ---
 ---@return string|nil # Deprecated message, or nil if no message was shown.
 function vim.deprecate(name, alternative, version, plugin, backtrace)
-  local msg = ('%s is deprecated'):format(name)
+  vim.validate {
+    name = { name, 'string' },
+    alternative = { alternative, 'string', true },
+    version = { version, 'string', true },
+    plugin = { plugin, 'string', true },
+  }
   plugin = plugin or 'Nvim'
-  msg = alternative and ('%s, use %s instead.'):format(msg, alternative) or msg
+
+  -- Only issue warning if feature is hard-deprecated as specified by MAINTAIN.md.
+  -- e.g., when planned to be removed in version = '0.12' (soft-deprecated since 0.10-dev),
+  -- show warnings since 0.11, including 0.11-dev (hard_deprecated_since = 0.11-dev).
+  if plugin == 'Nvim' then
+    local current_version = vim.version() ---@type Version
+    local removal_version = assert(vim.version.parse(version))
+    local is_hard_deprecated ---@type boolean
+
+    if removal_version.minor > 0 then
+      local hard_deprecated_since = assert(vim.version._version({
+        major = removal_version.major,
+        minor = removal_version.minor - 1,
+        patch = 0,
+        prerelease = 'dev', -- Show deprecation warnings in devel (nightly) version as well
+      }))
+      is_hard_deprecated = (current_version >= hard_deprecated_since)
+    else
+      -- Assume there will be no next minor version before bumping up the major version;
+      -- therefore we can always show a warning.
+      assert(removal_version.minor == 0, vim.inspect(removal_version))
+      is_hard_deprecated = true
+    end
+
+    if not is_hard_deprecated then
+      return
+    end
+  end
+
+  local msg = ('%s is deprecated'):format(name)
+  msg = alternative and ('%s, use %s instead.'):format(msg, alternative) or (msg .. '.')
   msg = ('%s%s\nThis feature will be removed in %s version %s'):format(
     msg,
     (plugin == 'Nvim' and ' :help deprecated' or ''),

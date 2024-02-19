@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <signal.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,20 +16,25 @@
 #include "nvim/api/private/helpers.h"
 #include "nvim/ascii_defs.h"
 #include "nvim/cursor_shape.h"
+#include "nvim/event/defs.h"
 #include "nvim/event/loop.h"
 #include "nvim/event/signal.h"
 #include "nvim/event/stream.h"
 #include "nvim/globals.h"
 #include "nvim/grid.h"
+#include "nvim/grid_defs.h"
 #include "nvim/highlight_defs.h"
 #include "nvim/log.h"
 #include "nvim/macros_defs.h"
 #include "nvim/main.h"
+#include "nvim/map_defs.h"
 #include "nvim/mbyte.h"
 #include "nvim/memory.h"
 #include "nvim/msgpack_rpc/channel.h"
 #include "nvim/os/input.h"
 #include "nvim/os/os.h"
+#include "nvim/os/os_defs.h"
+#include "nvim/strings.h"
 #include "nvim/tui/input.h"
 #include "nvim/tui/terminfo.h"
 #include "nvim/tui/tui.h"
@@ -131,11 +137,14 @@ struct TUIData {
     int sync;
   } unibi_ext;
   char *space_buf;
+  size_t space_buf_len;
   bool stopped;
   int seen_error_exit;
   int width;
   int height;
   bool rgb;
+  int url;  ///< Index of URL currently being printed, if any
+  StringBuilder urlbuf;  ///< Re-usable buffer for writing OSC 8 control sequences
 };
 
 static int got_winch = 0;
@@ -143,6 +152,8 @@ static bool cursor_style_enabled = false;
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "tui/tui.c.generated.h"
 #endif
+
+static Set(cstr_t) urls = SET_INIT;
 
 void tui_start(TUIData **tui_p, int *width, int *height, char **term, bool *rgb)
   FUNC_ATTR_NONNULL_ALL
@@ -153,7 +164,9 @@ void tui_start(TUIData **tui_p, int *width, int *height, char **term, bool *rgb)
   tui->stopped = false;
   tui->seen_error_exit = 0;
   tui->loop = &main_loop;
+  tui->url = -1;
   kv_init(tui->invalid_regions);
+  kv_init(tui->urlbuf);
   signal_watcher_init(tui->loop, &tui->winch_handle, tui);
 
   // TODO(bfredl): zero hl is empty, send this explicitly?
@@ -257,6 +270,10 @@ static void tui_query_kitty_keyboard(TUIData *tui)
   out(tui, S_LEN("\x1b[?u\x1b[c"));
 }
 
+/// Enable the alternate screen and emit other control sequences to start the TUI.
+///
+/// This is also called when the TUI is resumed after being suspended. We reinitialize all state
+/// from terminfo just in case the controlling terminal has changed (#27177).
 static void terminfo_start(TUIData *tui)
 {
   tui->scroll_region_is_full_screen = true;
@@ -406,10 +423,11 @@ static void terminfo_start(TUIData *tui)
   flush_buf(tui);
 }
 
+/// Disable the alternate screen and prepare for the TUI to close.
 static void terminfo_stop(TUIData *tui)
 {
   // Destroy output stuff
-  tui_mode_change(tui, (String)STRING_INIT, SHAPE_IDX_N);
+  tui_mode_change(tui, NULL_STRING, SHAPE_IDX_N);
   tui_mouse_off(tui);
   unibi_out(tui, unibi_exit_attribute_mode);
   // Reset cursor to normal before exiting alternate screen.
@@ -420,7 +438,7 @@ static void terminfo_stop(TUIData *tui)
   tui_reset_key_encoding(tui);
 
   // May restore old title before exiting alternate screen.
-  tui_set_title(tui, (String)STRING_INIT);
+  tui_set_title(tui, NULL_STRING);
   if (ui_client_exit_status == 0) {
     ui_client_exit_status = tui->seen_error_exit;
   }
@@ -477,7 +495,7 @@ static void tui_terminal_after_startup(TUIData *tui)
   flush_buf(tui);
 }
 
-/// stop the terminal but allow it to restart later (like after suspend)
+/// Stop the terminal but allow it to restart later (like after suspend)
 static void tui_terminal_stop(TUIData *tui)
 {
   if (uv_is_closing((uv_handle_t *)&tui->output_handle)) {
@@ -519,7 +537,15 @@ void tui_free_all_mem(TUIData *tui)
 {
   ugrid_free(&tui->grid);
   kv_destroy(tui->invalid_regions);
+
+  const char *url;
+  set_foreach(&urls, url, {
+    xfree((void *)url);
+  });
+  set_destroy(cstr_t, &urls);
+
   kv_destroy(tui->attrs);
+  kv_destroy(tui->urlbuf);
   xfree(tui->space_buf);
   xfree(tui->term);
   xfree(tui);
@@ -546,6 +572,10 @@ static bool attrs_differ(TUIData *tui, int id1, int id2, bool rgb)
   }
   HlAttrs a1 = kv_A(tui->attrs, (size_t)id1);
   HlAttrs a2 = kv_A(tui->attrs, (size_t)id2);
+
+  if (a1.url != a2.url) {
+    return true;
+  }
 
   if (rgb) {
     return a1.rgb_fg_color != a2.rgb_fg_color
@@ -706,6 +736,19 @@ static void update_attrs(TUIData *tui, int attr_id)
     }
   }
 
+  if (tui->url != attrs.url) {
+    if (attrs.url >= 0) {
+      const char *url = urls.keys[attrs.url];
+      kv_size(tui->urlbuf) = 0;
+      kv_printf(tui->urlbuf, "\x1b]8;;%s\x1b\\", url);
+      out(tui, tui->urlbuf.items, kv_size(tui->urlbuf));
+    } else {
+      out(tui, S_LEN("\x1b]8;;\x1b\\"));
+    }
+
+    tui->url = attrs.url;
+  }
+
   tui->default_attr = fg == -1 && bg == -1
                       && !bold && !italic && !has_any_underline && !reverse && !standout
                       && !strikethrough;
@@ -782,6 +825,13 @@ static void cursor_goto(TUIData *tui, int row, int col)
   if (row == grid->row && col == grid->col) {
     return;
   }
+
+  // If an OSC 8 sequence is active terminate it before moving the cursor
+  if (tui->url >= 0) {
+    out(tui, S_LEN("\x1b]8;;\x1b\\"));
+    tui->url = -1;
+  }
+
   if (0 == row && 0 == col) {
     unibi_out(tui, unibi_cursor_home);
     ugrid_goto(grid, row, col);
@@ -1006,10 +1056,7 @@ void tui_grid_resize(TUIData *tui, Integer g, Integer width, Integer height)
 {
   UGrid *grid = &tui->grid;
   ugrid_resize(grid, (int)width, (int)height);
-
-  xfree(tui->space_buf);
-  tui->space_buf = xmalloc((size_t)width * sizeof(*tui->space_buf));
-  memset(tui->space_buf, ' ', (size_t)width);
+  ensure_space_buf_size(tui, (size_t)width);
 
   // resize might not always be followed by a clear before flush
   // so clip the invalid region
@@ -1278,11 +1325,32 @@ void tui_grid_scroll(TUIData *tui, Integer g, Integer startrow, Integer endrow, 
   }
 }
 
+/// Add a URL to be used in an OSC 8 hyperlink.
+///
+/// @param tui TUIData
+/// @param url URL to add
+/// @return Index of new URL, or -1 if URL is invalid
+int32_t tui_add_url(TUIData *tui, const char *url)
+  FUNC_ATTR_NONNULL_ARG(1)
+{
+  if (url == NULL) {
+    return -1;
+  }
+
+  MHPutStatus status;
+  uint32_t k = set_put_idx(cstr_t, &urls, url, &status);
+  if (status != kMHExisting) {
+    urls.keys[k] = xstrdup(url);
+  }
+  return (int32_t)k;
+}
+
 void tui_hl_attr_define(TUIData *tui, Integer id, HlAttrs attrs, HlAttrs cterm_attrs, Array info)
 {
   attrs.cterm_ae_attr = cterm_attrs.cterm_ae_attr;
   attrs.cterm_fg_color = cterm_attrs.cterm_fg_color;
   attrs.cterm_bg_color = cterm_attrs.cterm_bg_color;
+
   kv_a(tui->attrs, (size_t)id) = attrs;
 }
 
@@ -1299,16 +1367,19 @@ void tui_visual_bell(TUIData *tui)
 void tui_default_colors_set(TUIData *tui, Integer rgb_fg, Integer rgb_bg, Integer rgb_sp,
                             Integer cterm_fg, Integer cterm_bg)
 {
-  tui->clear_attrs.rgb_fg_color = (int)rgb_fg;
-  tui->clear_attrs.rgb_bg_color = (int)rgb_bg;
-  tui->clear_attrs.rgb_sp_color = (int)rgb_sp;
-  tui->clear_attrs.cterm_fg_color = (int)cterm_fg;
-  tui->clear_attrs.cterm_bg_color = (int)cterm_bg;
+  tui->clear_attrs.rgb_fg_color = (RgbValue)rgb_fg;
+  tui->clear_attrs.rgb_bg_color = (RgbValue)rgb_bg;
+  tui->clear_attrs.rgb_sp_color = (RgbValue)rgb_sp;
+  tui->clear_attrs.cterm_fg_color = (int16_t)cterm_fg;
+  tui->clear_attrs.cterm_bg_color = (int16_t)cterm_bg;
 
   tui->print_attr_id = -1;
   invalidate(tui, 0, tui->grid.height, 0, tui->grid.width);
 }
 
+/// Flushes TUI grid state to a buffer (which is later flushed to the TTY by `flush_buf`).
+///
+/// @see flush_buf
 void tui_flush(TUIData *tui)
 {
   UGrid *grid = &tui->grid;
@@ -1363,28 +1434,28 @@ static void show_verbose_terminfo(TUIData *tui)
     abort();
   }
 
-  Array chunks = ARRAY_DICT_INIT;
-  Array title = ARRAY_DICT_INIT;
-  ADD(title, CSTR_TO_OBJ("\n\n--- Terminal info --- {{{\n"));
-  ADD(title, CSTR_TO_OBJ("Title"));
-  ADD(chunks, ARRAY_OBJ(title));
-  Array info = ARRAY_DICT_INIT;
+  MAXSIZE_TEMP_ARRAY(chunks, 3);
+  MAXSIZE_TEMP_ARRAY(title, 2);
+  ADD_C(title, CSTR_AS_OBJ("\n\n--- Terminal info --- {{{\n"));
+  ADD_C(title, CSTR_AS_OBJ("Title"));
+  ADD_C(chunks, ARRAY_OBJ(title));
+  MAXSIZE_TEMP_ARRAY(info, 2);
   String str = terminfo_info_msg(ut, tui->term);
-  ADD(info, STRING_OBJ(str));
-  ADD(chunks, ARRAY_OBJ(info));
-  Array end_fold = ARRAY_DICT_INIT;
-  ADD(end_fold, CSTR_TO_OBJ("}}}\n"));
-  ADD(end_fold, CSTR_TO_OBJ("Title"));
-  ADD(chunks, ARRAY_OBJ(end_fold));
+  ADD_C(info, STRING_OBJ(str));
+  ADD_C(chunks, ARRAY_OBJ(info));
+  MAXSIZE_TEMP_ARRAY(end_fold, 2);
+  ADD_C(end_fold, CSTR_AS_OBJ("}}}\n"));
+  ADD_C(end_fold, CSTR_AS_OBJ("Title"));
+  ADD_C(chunks, ARRAY_OBJ(end_fold));
 
-  Array args = ARRAY_DICT_INIT;
-  ADD(args, ARRAY_OBJ(chunks));
-  ADD(args, BOOLEAN_OBJ(true));  // history
-  Dictionary opts = ARRAY_DICT_INIT;
-  PUT(opts, "verbose", BOOLEAN_OBJ(true));
-  ADD(args, DICTIONARY_OBJ(opts));
+  MAXSIZE_TEMP_ARRAY(args, 3);
+  ADD_C(args, ARRAY_OBJ(chunks));
+  ADD_C(args, BOOLEAN_OBJ(true));  // history
+  MAXSIZE_TEMP_DICT(opts, 1);
+  PUT_C(opts, "verbose", BOOLEAN_OBJ(true));
+  ADD_C(args, DICTIONARY_OBJ(opts));
   rpc_send_event(ui_client_channel_id, "nvim_echo", args);
-  api_free_array(args);
+  xfree(str.data);
 }
 
 void tui_suspend(TUIData *tui)
@@ -1494,6 +1565,14 @@ void tui_option_set(TUIData *tui, String name, Object value)
   }
 }
 
+void tui_chdir(TUIData *tui, String path)
+{
+  int err = uv_chdir(path.data);
+  if (err != 0) {
+    ELOG("Failed to chdir to %s: %s", path.data, strerror(err));
+  }
+}
+
 void tui_raw_line(TUIData *tui, Integer g, Integer linerow, Integer startcol, Integer endcol,
                   Integer clearcol, Integer clearattr, LineFlags flags, const schar_T *chunk,
                   const sattr_T *attrs)
@@ -1561,6 +1640,15 @@ static void invalidate(TUIData *tui, int top, int bot, int left, int right)
   }
 }
 
+static void ensure_space_buf_size(TUIData *tui, size_t len)
+{
+  if (len > tui->space_buf_len) {
+    tui->space_buf = xrealloc(tui->space_buf, len * sizeof *tui->space_buf);
+    memset(tui->space_buf + tui->space_buf_len, ' ', len - tui->space_buf_len);
+    tui->space_buf_len = len;
+  }
+}
+
 /// Tries to get the user's wanted dimensions (columns and rows) for the entire
 /// application (i.e., the host terminal).
 void tui_guess_size(TUIData *tui)
@@ -1597,6 +1685,7 @@ void tui_guess_size(TUIData *tui)
 
   tui->width = width;
   tui->height = height;
+  ensure_space_buf_size(tui, (size_t)tui->width);
 
   // Redraw on SIGWINCH event if size didn't change. #23411
   ui_client_set_size(width, height);
@@ -2324,6 +2413,9 @@ static size_t flush_buf_end(TUIData *tui, char *buf, size_t len)
   return offset;
 }
 
+/// Flushes the rendered buffer to the TTY.
+///
+/// @see tui_flush
 static void flush_buf(TUIData *tui)
 {
   uv_write_t req;

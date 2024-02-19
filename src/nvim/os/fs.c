@@ -18,6 +18,7 @@
 
 #include "auto/config.h"
 #include "nvim/os/fs.h"
+#include "nvim/os/os_defs.h"
 
 #if defined(HAVE_ACL)
 # ifdef HAVE_SYS_ACL_H
@@ -32,8 +33,9 @@
 # include <sys/xattr.h>
 #endif
 
+#include "nvim/api/private/helpers.h"
 #include "nvim/ascii_defs.h"
-#include "nvim/gettext.h"
+#include "nvim/gettext_defs.h"
 #include "nvim/globals.h"
 #include "nvim/log.h"
 #include "nvim/macros_defs.h"
@@ -43,6 +45,7 @@
 #include "nvim/os/os.h"
 #include "nvim/path.h"
 #include "nvim/types_defs.h"
+#include "nvim/ui.h"
 #include "nvim/vim_defs.h"
 
 #ifdef HAVE_SYS_UIO_H
@@ -52,6 +55,7 @@
 #ifdef MSWIN
 # include "nvim/mbyte.h"
 # include "nvim/option.h"
+# include "nvim/os/os_win_console.h"
 # include "nvim/strings.h"
 #endif
 
@@ -89,7 +93,11 @@ int os_chdir(const char *path)
     smsg(0, "chdir(%s)", path);
     verbose_leave();
   }
-  return uv_chdir(path);
+  int err = uv_chdir(path);
+  if (err == 0) {
+    ui_call_chdir(cstr_as_string(path));
+  }
+  return err;
 }
 
 /// Get the name of current directory.
@@ -532,6 +540,22 @@ os_dup_dup:
     }
   }
   return ret;
+}
+
+/// Open the file descriptor for stdin.
+int os_open_stdin_fd(void)
+{
+  int stdin_dup_fd;
+  if (stdin_fd > 0) {
+    stdin_dup_fd = stdin_fd;
+  } else {
+    stdin_dup_fd = os_dup(STDIN_FILENO);
+#ifdef MSWIN
+    // Replace the original stdin with the console input handle.
+    os_replace_stdin_to_conin();
+#endif
+  }
+  return stdin_dup_fd;
 }
 
 /// Read from a file

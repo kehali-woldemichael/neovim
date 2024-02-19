@@ -88,7 +88,7 @@ it('TextChangedI and TextChangedP autocommands', function()
   eq('IIPPPP', eval('g:autocmd'))
   feed('<esc>')
 
-  eq({'foo', 'bar', 'foobar', 'foo'}, eval('getline(1, "$")'))
+  eq({ 'foo', 'bar', 'foobar', 'foo' }, eval('getline(1, "$")'))
 end)
 
 -- oldtest: Test_TextChangedI_with_setline()
@@ -172,11 +172,22 @@ it('TextChangedI and TextChanged', function()
     eq('', eval('g:autocmd_n'))
   end
 
-  validate_mixed_textchangedi({'o', '<esc>'})
-  validate_mixed_textchangedi({'O', '<esc>'})
-  validate_mixed_textchangedi({'ciw', '<esc>'})
-  validate_mixed_textchangedi({'cc', '<esc>'})
-  validate_mixed_textchangedi({'C', '<esc>'})
-  validate_mixed_textchangedi({'s', '<esc>'})
-  validate_mixed_textchangedi({'S', '<esc>'})
+  validate_mixed_textchangedi({ 'o', '<esc>' })
+  validate_mixed_textchangedi({ 'O', '<esc>' })
+  validate_mixed_textchangedi({ 'ciw', '<esc>' })
+  validate_mixed_textchangedi({ 'cc', '<esc>' })
+  validate_mixed_textchangedi({ 'C', '<esc>' })
+  validate_mixed_textchangedi({ 's', '<esc>' })
+  validate_mixed_textchangedi({ 'S', '<esc>' })
+end)
+
+-- oldtest: Test_TextChanged_with_norm()
+it('TextChanged is triggered after :norm that enters Insert mode', function()
+  exec([[
+    let g:a = 0
+    au TextChanged * let g:a += 1
+  ]])
+  eq(0, eval('g:a'))
+  feed(':norm! ia<CR>')
+  eq(1, eval('g:a'))
 end)
