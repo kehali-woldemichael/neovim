@@ -13,6 +13,7 @@
 #include "nvim/charset.h"
 #include "nvim/cmdexpand.h"
 #include "nvim/cmdexpand_defs.h"
+#include "nvim/errors.h"
 #include "nvim/ex_cmds.h"
 #include "nvim/ex_cmds_defs.h"
 #include "nvim/ex_docmd.h"
@@ -613,7 +614,7 @@ void cleanup_help_tags(int num_file, char **file)
 void prepare_help_buffer(void)
 {
   curbuf->b_help = true;
-  set_string_option_direct(kOptBuftype, "help", OPT_LOCAL, 0);
+  set_option_direct(kOptBuftype, STATIC_CSTR_AS_OPTVAL("help"), OPT_LOCAL, 0);
 
   // Always set these options after jumping to a help tag, because the
   // user may have an autocommand that gets in the way.
@@ -622,13 +623,13 @@ void prepare_help_buffer(void)
   // Only set it when needed, buf_init_chartab() is some work.
   char *p = "!-~,^*,^|,^\",192-255";
   if (strcmp(curbuf->b_p_isk, p) != 0) {
-    set_string_option_direct(kOptIskeyword, p, OPT_LOCAL, 0);
+    set_option_direct(kOptIskeyword, CSTR_AS_OPTVAL(p), OPT_LOCAL, 0);
     check_buf_options(curbuf);
     buf_init_chartab(curbuf, false);
   }
 
   // Don't use the global foldmethod.
-  set_string_option_direct(kOptFoldmethod, "manual", OPT_LOCAL, 0);
+  set_option_direct(kOptFoldmethod, STATIC_CSTR_AS_OPTVAL("manual"), OPT_LOCAL, 0);
 
   curbuf->b_p_ts = 8;         // 'tabstop' is 8.
   curwin->w_p_list = false;   // No list mode.
@@ -957,8 +958,8 @@ static void helptags_one(char *dir, const char *ext, const char *tagfname, bool 
           if (s == p2
               && (p1 == IObuff || p1[-1] == ' ' || p1[-1] == '\t')
               && (vim_strchr(" \t\n\r", (uint8_t)s[1]) != NULL
-                  || s[1] == '\0')) {
-            *p2 = '\0';
+                  || s[1] == NUL)) {
+            *p2 = NUL;
             p1++;
             size_t s_len = (size_t)(p2 - p1) + strlen(fname) + 2;
             s = xmalloc(s_len);

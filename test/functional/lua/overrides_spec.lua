@@ -1,19 +1,20 @@
 -- Test for Vim overrides of lua built-ins
-local helpers = require('test.functional.helpers')(after_each)
+local t = require('test.testutil')
+local n = require('test.functional.testnvim')()
 local Screen = require('test.functional.ui.screen')
 
-local eq = helpers.eq
+local eq = t.eq
 local NIL = vim.NIL
-local feed = helpers.feed
-local clear = helpers.clear
-local fn = helpers.fn
-local api = helpers.api
-local command = helpers.command
-local write_file = helpers.write_file
-local exec_capture = helpers.exec_capture
-local exec_lua = helpers.exec_lua
-local pcall_err = helpers.pcall_err
-local is_os = helpers.is_os
+local feed = n.feed
+local clear = n.clear
+local fn = n.fn
+local api = n.api
+local command = n.command
+local write_file = t.write_file
+local exec_capture = n.exec_capture
+local exec_lua = n.exec_lua
+local pcall_err = t.pcall_err
+local is_os = t.is_os
 
 local fname = 'Xtest-functional-lua-overrides-luafile'
 
@@ -133,14 +134,12 @@ describe('print', function()
     eq('abc  def', exec_capture('lua print("abc", "", "def")'))
   end)
   it('defers printing in luv event handlers', function()
-    exec_lua(
-      [[
-      local cmd = ...
+    exec_lua(function(cmd)
       function test()
         local timer = vim.uv.new_timer()
         local done = false
         timer:start(10, 0, function()
-          print("very fast")
+          print('very fast')
           timer:close()
           done = true
         end)
@@ -148,14 +147,12 @@ describe('print', function()
         -- loop until we know for sure the callback has been executed
         while not done do
           os.execute(cmd)
-          vim.uv.run("nowait") -- fake os_breakcheck()
+          vim.uv.run('nowait') -- fake os_breakcheck()
         end
-        print("very slow")
-        vim.api.nvim_command("sleep 1m") -- force deferred event processing
+        print('very slow')
+        vim.api.nvim_command('sleep 1m') -- force deferred event processing
       end
-    ]],
-      (is_os('win') and 'timeout 1') or 'sleep 0.1'
-    )
+    end, (is_os('win') and 'timeout 1') or 'sleep 0.1')
     eq('very slow\nvery fast', exec_capture('lua test()'))
   end)
 
@@ -195,7 +192,7 @@ describe('print', function()
 end)
 
 describe('debug.debug', function()
-  local screen
+  local screen --- @type test.functional.ui.screen
 
   before_each(function()
     screen = Screen.new()

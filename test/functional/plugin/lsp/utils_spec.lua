@@ -1,30 +1,21 @@
-local helpers = require('test.functional.helpers')(after_each)
+local t = require('test.testutil')
+local n = require('test.functional.testnvim')()
 local Screen = require('test.functional.ui.screen')
-local feed = helpers.feed
 
-local eq = helpers.eq
-local exec_lua = helpers.exec_lua
+local feed = n.feed
+local eq = t.eq
+local exec_lua = n.exec_lua
 
 describe('vim.lsp.util', function()
-  before_each(helpers.clear)
+  before_each(n.clear)
 
   describe('stylize_markdown', function()
     local stylize_markdown = function(content, opts)
-      return exec_lua(
-        [[
-        local bufnr = vim.uri_to_bufnr("file:///fake/uri")
+      return exec_lua(function()
+        local bufnr = vim.uri_to_bufnr('file:///fake/uri')
         vim.fn.bufload(bufnr)
-
-        local args = { ... }
-        local content = args[1]
-        local opts = args[2]
-        local stripped_content = vim.lsp.util.stylize_markdown(bufnr, content, opts)
-
-        return stripped_content
-      ]],
-        content,
-        opts
-      )
+        return vim.lsp.util.stylize_markdown(bufnr, content, opts)
+      end)
     end
 
     it('code fences', function()
@@ -94,7 +85,7 @@ describe('vim.lsp.util', function()
 
   describe('normalize_markdown', function()
     it('collapses consecutive blank lines', function()
-      local result = exec_lua [[
+      local result = exec_lua(function()
         local lines = {
           'foo',
           '',
@@ -102,25 +93,25 @@ describe('vim.lsp.util', function()
           '',
           'bar',
           '',
-          'baz'
+          'baz',
         }
         return vim.lsp.util._normalize_markdown(lines)
-      ]]
+      end)
       local expected = { 'foo', '', 'bar', '', 'baz' }
       eq(expected, result)
     end)
 
     it('removes preceding and trailing empty lines', function()
-      local result = exec_lua [[
+      local result = exec_lua(function()
         local lines = {
           '',
           'foo',
           'bar',
           '',
-          ''
+          '',
         }
         return vim.lsp.util._normalize_markdown(lines)
-      ]]
+      end)
       local expected = { 'foo', 'bar' }
       eq(expected, result)
     end)
@@ -128,21 +119,16 @@ describe('vim.lsp.util', function()
 
   describe('make_floating_popup_options', function()
     local function assert_anchor(anchor_bias, expected_anchor)
-      local opts = exec_lua(
-        [[
-          local args = { ... }
-          local anchor_bias = args[1]
-          return vim.lsp.util.make_floating_popup_options(30, 10, { anchor_bias = anchor_bias })
-        ]],
-        anchor_bias
-      )
+      local opts = exec_lua(function()
+        return vim.lsp.util.make_floating_popup_options(30, 10, { anchor_bias = anchor_bias })
+      end)
 
       eq(expected_anchor, string.sub(opts.anchor, 1, 1))
     end
 
-    local screen
+    local screen --- @type test.functional.ui.screen
     before_each(function()
-      helpers.clear()
+      n.clear()
       screen = Screen.new(80, 80)
       screen:attach()
       feed('79i<CR><Esc>') -- fill screen with empty lines
@@ -220,9 +206,9 @@ describe('vim.lsp.util', function()
       end)
 
       it('bordered window truncates dimensions correctly', function()
-        local opts = exec_lua([[
+        local opts = exec_lua(function()
           return vim.lsp.util.make_floating_popup_options(100, 100, { border = 'single' })
-        ]])
+        end)
 
         eq(56, opts.height)
       end)

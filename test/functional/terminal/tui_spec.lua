@@ -4,45 +4,50 @@
 -- "bracketed paste" terminal feature:
 -- http://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h2-Bracketed-Paste-Mode
 
-local helpers = require('test.functional.helpers')(after_each)
-local thelpers = require('test.functional.terminal.helpers')
+local t = require('test.testutil')
+local n = require('test.functional.testnvim')()
 local Screen = require('test.functional.ui.screen')
-local eq = helpers.eq
-local feed_data = thelpers.feed_data
-local clear = helpers.clear
-local command = helpers.command
-local dedent = helpers.dedent
-local exec = helpers.exec
-local exec_lua = helpers.exec_lua
-local testprg = helpers.testprg
-local retry = helpers.retry
-local nvim_prog = helpers.nvim_prog
-local nvim_set = helpers.nvim_set
-local ok = helpers.ok
-local read_file = helpers.read_file
-local fn = helpers.fn
-local api = helpers.api
-local is_ci = helpers.is_ci
-local is_os = helpers.is_os
-local new_pipename = helpers.new_pipename
-local spawn_argv = helpers.spawn_argv
-local set_session = helpers.set_session
-local write_file = helpers.write_file
-local eval = helpers.eval
+local tt = require('test.functional.testterm')
 
-if helpers.skip(is_os('win')) then
+local eq = t.eq
+local feed_data = tt.feed_data
+local clear = n.clear
+local command = n.command
+local dedent = t.dedent
+local exec = n.exec
+local exec_lua = n.exec_lua
+local testprg = n.testprg
+local retry = t.retry
+local nvim_prog = n.nvim_prog
+local nvim_set = n.nvim_set
+local ok = t.ok
+local read_file = t.read_file
+local fn = n.fn
+local api = n.api
+local is_ci = t.is_ci
+local is_os = t.is_os
+local new_pipename = n.new_pipename
+local spawn_argv = n.spawn_argv
+local set_session = n.set_session
+local write_file = t.write_file
+local eval = n.eval
+local assert_log = t.assert_log
+
+local testlog = 'Xtest-tui-log'
+
+if t.skip(is_os('win')) then
   return
 end
 
 describe('TUI', function()
-  local screen
-  local child_session
+  local screen --[[@type test.functional.ui.screen]]
+  local child_session --[[@type test.Session]]
   local child_exec_lua
 
   before_each(function()
     clear()
     local child_server = new_pipename()
-    screen = thelpers.setup_child_nvim({
+    screen = tt.setup_child_nvim({
       '--listen',
       child_server,
       '-u',
@@ -61,8 +66,8 @@ describe('TUI', function()
                                                         |
       {3:-- TERMINAL --}                                    |
     ]])
-    child_session = helpers.connect(child_server)
-    child_exec_lua = thelpers.make_lua_executor(child_session)
+    child_session = n.connect(child_server)
+    child_exec_lua = tt.make_lua_executor(child_session)
   end)
 
   -- Wait for mode in the child Nvim (avoid "typeahead race" #10826).
@@ -83,7 +88,6 @@ describe('TUI', function()
   end
 
   it('rapid resize #7572 #7628', function()
-    helpers.skip(helpers.is_asan(), 'Test extra unstable with ASAN. See #23762')
     -- Need buffer rows to provoke the behavior.
     feed_data(':edit test/functional/fixtures/bigfile.txt\n')
     screen:expect([[
@@ -626,6 +630,8 @@ describe('TUI', function()
       set mouse=a mousemodel=popup
 
       aunmenu PopUp
+      " Delete the default MenuPopup event handler.
+      autocmd! nvim_popupmenu
       menu PopUp.foo :let g:menustr = 'foo'<CR>
       menu PopUp.bar :let g:menustr = 'bar'<CR>
       menu PopUp.baz :let g:menustr = 'baz'<CR>
@@ -969,6 +975,7 @@ describe('TUI', function()
       {3:-- TERMINAL --}                                    |
     ]])
     feed_data('\027[201~') -- End paste.
+    screen:expect_unchanged()
     feed_data('\027[27u') -- ESC: go to Normal mode.
     wait_for_mode('n')
     screen:expect([[
@@ -1052,6 +1059,11 @@ describe('TUI', function()
     if is_ci('github') then
       pending('tty-test complains about not owning the terminal -- actions/runner#241')
     end
+    screen:set_default_attr_ids({
+      [1] = { reverse = true }, -- focused cursor
+      [3] = { bold = true },
+      [19] = { bold = true, background = 121, foreground = 0 }, -- StatusLineTerm
+    })
     child_exec_lua('vim.o.statusline="^^^^^^^"')
     child_exec_lua('vim.cmd.terminal(...)', testprg('tty-test'))
     feed_data('i')
@@ -1059,7 +1071,7 @@ describe('TUI', function()
       tty ready                                         |
       {1: }                                                 |
                                                         |*2
-      {5:^^^^^^^                                           }|
+      {19:^^^^^^^                                           }|
       {3:-- TERMINAL --}                                    |*2
     ]])
     feed_data('\027[200~')
@@ -1069,7 +1081,7 @@ describe('TUI', function()
       tty ready                                         |
       hallo{1: }                                            |
                                                         |*2
-      {5:^^^^^^^                                           }|
+      {19:^^^^^^^                                           }|
       {3:-- TERMINAL --}                                    |*2
     ]])
   end)
@@ -1095,7 +1107,7 @@ describe('TUI', function()
     screen:expect(expected_grid1)
     -- Dot-repeat/redo.
     feed_data('.')
-    screen:expect([[
+    local expected_grid2 = [[
       ESC:{6:^[} / CR:                                      |
       xline 1                                           |
       ESC:{6:^[} / CR:                                      |
@@ -1103,7 +1115,8 @@ describe('TUI', function()
       {5:[No Name] [+]                   5,1            Bot}|
                                                         |
       {3:-- TERMINAL --}                                    |
-    ]])
+    ]]
+    screen:expect(expected_grid2)
     -- Undo.
     feed_data('u')
     expect_child_buf_lines(expected_crlf)
@@ -1117,6 +1130,14 @@ describe('TUI', function()
     feed_data('\027[200~' .. table.concat(expected_lf, '\r\n') .. '\027[201~')
     screen:expect(expected_grid1)
     expect_child_buf_lines(expected_crlf)
+    -- Dot-repeat/redo.
+    feed_data('.')
+    screen:expect(expected_grid2)
+    -- Undo.
+    feed_data('u')
+    expect_child_buf_lines(expected_crlf)
+    feed_data('u')
+    expect_child_buf_lines({ '' })
   end)
 
   it('paste: cmdline-mode inserts 1 line', function()
@@ -1180,6 +1201,7 @@ describe('TUI', function()
     expect_cmdline('"stuff 1 more"')
     -- End the paste sequence.
     feed_data('\027[201~')
+    expect_cmdline('"stuff 1 more"')
     feed_data(' typed')
     expect_cmdline('"stuff 1 more typed"')
   end)
@@ -1223,6 +1245,7 @@ describe('TUI', function()
     feed_data('line 7\nline 8\n')
     -- Stop paste.
     feed_data('\027[201~')
+    screen:expect_unchanged()
     feed_data('\n') -- <CR> to dismiss hit-enter prompt
     expect_child_buf_lines({ 'foo', '' })
     -- Dot-repeat/redo is not modified by failed paste.
@@ -1270,8 +1293,44 @@ describe('TUI', function()
       {}
     )
     feed_data('\027[200~line A\nline B\n\027[201~')
+    expect_child_buf_lines({ '' })
     feed_data('ifoo\n\027[27u')
     expect_child_buf_lines({ 'foo', '' })
+  end)
+
+  it('paste: vim.paste() cancel (retval=false) with streaming #30462', function()
+    child_session:request(
+      'nvim_exec_lua',
+      [[
+        vim.paste = (function(overridden)
+          return function(lines, phase)
+            for i, line in ipairs(lines) do
+              if line:find('!') then
+                return false
+              end
+            end
+            return overridden(lines, phase)
+          end
+        end)(vim.paste)
+      ]],
+      {}
+    )
+    feed_data('A')
+    wait_for_mode('i')
+    feed_data('\027[200~aaa')
+    expect_child_buf_lines({ 'aaa' })
+    feed_data('bbb')
+    expect_child_buf_lines({ 'aaabbb' })
+    feed_data('ccc!') -- This chunk is cancelled.
+    expect_child_buf_lines({ 'aaabbb' })
+    feed_data('ddd\027[201~') -- This chunk is ignored.
+    expect_child_buf_lines({ 'aaabbb' })
+    feed_data('\027[27u')
+    wait_for_mode('n')
+    feed_data('.') -- Dot-repeat only includes chunks actually pasted.
+    expect_child_buf_lines({ 'aaabbbaaabbb' })
+    feed_data('$\027[200~eee\027[201~') -- A following paste works normally.
+    expect_child_buf_lines({ 'aaabbbaaabbbeee' })
   end)
 
   it("paste: 'nomodifiable' buffer", function()
@@ -1345,15 +1404,15 @@ describe('TUI', function()
 
   it('paste: big burst of input', function()
     feed_data(':set ruler\n')
-    local t = {}
+    local q = {}
     for i = 1, 3000 do
-      t[i] = 'item ' .. tostring(i)
+      q[i] = 'item ' .. tostring(i)
     end
     feed_data('i')
     wait_for_mode('i')
     -- "bracketed paste"
-    feed_data('\027[200~' .. table.concat(t, '\n') .. '\027[201~')
-    expect_child_buf_lines(t)
+    feed_data('\027[200~' .. table.concat(q, '\n') .. '\027[201~')
+    expect_child_buf_lines(q)
     feed_data(' end')
     screen:expect([[
       item 2997                                         |
@@ -1392,7 +1451,6 @@ describe('TUI', function()
     feed_data('\n')
     -- Send the "stop paste" sequence.
     feed_data('\027[201~')
-
     screen:expect([[
                                                         |
       pasted from terminal (1)                          |
@@ -1486,7 +1544,8 @@ describe('TUI', function()
     feed_data('\027[201~') -- phase 3
     screen:expect_unchanged()
     local _, rv = child_session:request('nvim_exec_lua', [[return _G.paste_phases]], {})
-    eq({ 1, 2, 3 }, rv)
+    -- In rare cases there may be multiple chunks of phase 2 because of timing.
+    eq({ 1, 2, 3 }, { rv[1], rv[2], rv[#rv] })
   end)
 
   it('allows termguicolors to be set at runtime', function()
@@ -1543,10 +1602,32 @@ describe('TUI', function()
     screen:set_rgb_cterm(true)
     screen:set_default_attr_ids({
       [1] = { { reverse = true }, { reverse = true } },
-      [2] = { { bold = true, reverse = true }, { bold = true, reverse = true } },
+      [2] = {
+        { bold = true, background = Screen.colors.LightGreen, foreground = Screen.colors.Black },
+        { bold = true },
+      },
       [3] = { { bold = true }, { bold = true } },
       [4] = { { fg_indexed = true, foreground = tonumber('0xe0e000') }, { foreground = 3 } },
       [5] = { { foreground = tonumber('0xff8000') }, {} },
+      [6] = {
+        {
+          fg_indexed = true,
+          bg_indexed = true,
+          bold = true,
+          background = tonumber('0x66ff99'),
+          foreground = Screen.colors.Black,
+        },
+        { bold = true, background = 121, foreground = 0 },
+      },
+      [7] = {
+        {
+          fg_indexed = true,
+          bg_indexed = true,
+          background = tonumber('0x66ff99'),
+          foreground = Screen.colors.Black,
+        },
+        { background = 121, foreground = 0 },
+      },
     })
 
     child_exec_lua('vim.o.statusline="^^^^^^^"')
@@ -1581,19 +1662,49 @@ describe('TUI', function()
       {1:t}ty ready                                         |
       {4:text}colortext                                     |
                                                         |*2
-      {2:^^^^^^^                                           }|
+      {6:^^^^^^^}{7:                                           }|
       :set notermguicolors                              |
       {3:-- TERMINAL --}                                    |
     ]],
     }
   end)
 
-  it('in nvim_list_uis()', function()
+  -- Note: libvterm doesn't support colored underline or undercurl.
+  it('supports undercurl and underdouble when run in :terminal', function()
+    screen:set_default_attr_ids({
+      [1] = { reverse = true },
+      [2] = { bold = true, reverse = true },
+      [3] = { bold = true },
+      [4] = { foreground = 12 },
+      [5] = { undercurl = true },
+      [6] = { underdouble = true },
+    })
+    child_session:request('nvim_set_hl', 0, 'Visual', { undercurl = true })
+    feed_data('ifoobar\027V')
+    screen:expect([[
+      {5:fooba}{1:r}                                            |
+      {4:~                                                 }|*3
+      {2:[No Name] [+]                                     }|
+      {3:-- VISUAL LINE --}                                 |
+      {3:-- TERMINAL --}                                    |
+    ]])
+    child_session:request('nvim_set_hl', 0, 'Visual', { underdouble = true })
+    screen:expect([[
+      {6:fooba}{1:r}                                            |
+      {4:~                                                 }|*3
+      {2:[No Name] [+]                                     }|
+      {3:-- VISUAL LINE --}                                 |
+      {3:-- TERMINAL --}                                    |
+    ]])
+  end)
+
+  it('in nvim_list_uis(), sets nvim_set_client_info()', function()
     -- $TERM in :terminal.
     local exp_term = is_os('bsd') and 'builtin_xterm' or 'xterm-256color'
+    local ui_chan = 1
     local expected = {
       {
-        chan = 1,
+        chan = ui_chan,
         ext_cmdline = false,
         ext_hlstate = false,
         ext_linegrid = true,
@@ -1616,9 +1727,46 @@ describe('TUI', function()
     }
     local _, rv = child_session:request('nvim_list_uis')
     eq(expected, rv)
+
+    ---@type table
+    local expected_version = ({
+      child_session:request('nvim_exec_lua', 'return vim.version()', {}),
+    })[2]
+    -- vim.version() returns `prerelease` string. Coerce it to boolean.
+    expected_version.prerelease = not not expected_version.prerelease
+
+    local expected_chan_info = {
+      client = {
+        attributes = {
+          license = 'Apache 2',
+          -- pid = 5371,
+          website = 'https://neovim.io',
+        },
+        methods = {},
+        name = 'nvim-tui',
+        type = 'ui',
+        version = expected_version,
+      },
+      id = ui_chan,
+      mode = 'rpc',
+      stream = 'stdio',
+    }
+
+    local status, chan_info = child_session:request('nvim_get_chan_info', ui_chan)
+    ok(status)
+    local info = chan_info.client
+    ok(info.attributes.pid and info.attributes.pid > 0, 'PID', info.attributes.pid or 'nil')
+    ok(info.version.major >= 0)
+    ok(info.version.minor >= 0)
+    ok(info.version.patch >= 0)
+
+    -- Delete variable fields so we can deep-compare.
+    info.attributes.pid = nil
+
+    eq(expected_chan_info, chan_info)
   end)
 
-  it('allows grid to assume wider ambiguous-width characters than host terminal #19686', function()
+  it('allows grid to assume wider ambiwidth chars than host terminal', function()
     child_session:request(
       'nvim_buf_set_lines',
       0,
@@ -1662,8 +1810,52 @@ describe('TUI', function()
     screen:expect(singlewidth_screen)
   end)
 
+  it('allows grid to assume wider non-ambiwidth chars than host terminal', function()
+    child_session:request(
+      'nvim_buf_set_lines',
+      0,
+      0,
+      -1,
+      true,
+      { ('✓'):rep(60), ('✓'):rep(60) }
+    )
+    child_session:request('nvim_set_option_value', 'cursorline', true, {})
+    child_session:request('nvim_set_option_value', 'list', true, {})
+    child_session:request('nvim_set_option_value', 'listchars', 'eol:$', { win = 0 })
+    feed_data('gg')
+    local singlewidth_screen = [[
+      {13:✓}{12:✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓}|
+      {12:✓✓✓✓✓✓✓✓✓✓}{15:$}{12:                                       }|
+      ✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓✓|
+      ✓✓✓✓✓✓✓✓✓✓{4:$}                                       |
+      {5:[No Name] [+]                                     }|
+                                                        |
+      {3:-- TERMINAL --}                                    |
+    ]]
+    -- When grid assumes "✓" to be double-width but host terminal assumes it to be single-width,
+    -- the second cell of "✓" is a space and the attributes of the "✓" are applied to it.
+    local doublewidth_screen = [[
+      {13:✓}{12: ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ }|
+      {12:✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ }|
+      {12:✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ }{15:$}{12:                             }|
+      ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ {4:@@@@}|
+      {5:[No Name] [+]                                     }|
+                                                        |
+      {3:-- TERMINAL --}                                    |
+    ]]
+    screen:expect(singlewidth_screen)
+    child_session:request('nvim_set_option_value', 'ambiwidth', 'double', {})
+    screen:expect_unchanged()
+    child_session:request('nvim_call_function', 'setcellwidths', { { { 0x2713, 0x2713, 2 } } })
+    screen:expect(doublewidth_screen)
+    child_session:request('nvim_set_option_value', 'ambiwidth', 'single', {})
+    screen:expect_unchanged()
+    child_session:request('nvim_call_function', 'setcellwidths', { { { 0x2713, 0x2713, 1 } } })
+    screen:expect(singlewidth_screen)
+  end)
+
   it('draws correctly when cursor_address overflows #21643', function()
-    helpers.skip(is_os('mac'), 'FIXME: crashes/errors on macOS')
+    t.skip(is_os('mac'), 'FIXME: crashes/errors on macOS')
     screen:try_resize(77, 855)
     retry(nil, nil, function()
       eq({ true, 852 }, { child_session:request('nvim_win_get_height', 0) })
@@ -1863,9 +2055,9 @@ describe('TUI', function()
           if not req then
             return
           end
-          local url = req:match('\027]8;;(.*)$')
-          if url ~= nil then
-            table.insert(_G.urls, url)
+          local id, url = req:match('\027]8;id=(%d+);(.*)$')
+          if id ~= nil and url ~= nil then
+            table.insert(_G.urls, { id = tonumber(id), url = url })
           end
         end,
       })
@@ -1879,7 +2071,7 @@ describe('TUI', function()
       })
     ]])
     retry(nil, 1000, function()
-      eq({ 'https://example.com', '' }, exec_lua([[return _G.urls]]))
+      eq({ { id = 0xE1EA0000, url = 'https://example.com' } }, exec_lua([[return _G.urls]]))
     end)
   end)
 end)
@@ -1895,6 +2087,7 @@ describe('TUI', function()
       [3] = { bold = true },
       [4] = { foreground = tonumber('0x4040ff'), fg_indexed = true },
       [5] = { bold = true, reverse = true },
+      [6] = { foreground = Screen.colors.White, background = Screen.colors.DarkGreen },
     })
     screen:attach()
     fn.termopen({
@@ -1920,10 +2113,44 @@ describe('TUI', function()
       {2:~                        }│{4:~                       }|*5
       {2:~                        }│{5:[No Name]   0,0-1    All}|
       {2:~                        }│                        |
-      {5:new                       }{1:{MATCH:<.*[/\]nvim }}|
+      {5:new                       }{6:{MATCH:<.*[/\]nvim }}|
                                                         |
     ]])
   end)
+
+  -- #28667, #28668
+  for _, guicolors in ipairs({ 'notermguicolors', 'termguicolors' }) do
+    it('has no black flicker when clearing regions during startup with ' .. guicolors, function()
+      local screen = Screen.new(50, 10)
+      screen:attach()
+      fn.termopen({
+        nvim_prog,
+        '--clean',
+        '--cmd',
+        'set ' .. guicolors,
+        '--cmd',
+        'sleep 10',
+      }, {
+        env = {
+          VIMRUNTIME = os.getenv('VIMRUNTIME'),
+        },
+      })
+      screen:expect({
+        grid = [[
+          ^                                                  |
+                                                            |*9
+        ]],
+        intermediate = true,
+      })
+      screen:try_resize(51, 11)
+      screen:expect({
+        grid = [[
+          ^                                                   |
+                                                             |*10
+        ]],
+      })
+    end)
+  end
 
   it('argv[0] can be overridden #23953', function()
     if not exec_lua('return pcall(require, "ffi")') then
@@ -1941,7 +2168,7 @@ describe('TUI', function()
     finally(function()
       os.remove(script_file)
     end)
-    local screen = thelpers.setup_child_nvim({ '--clean', '-l', script_file })
+    local screen = tt.setup_child_nvim({ '--clean', '-l', script_file })
     screen:expect {
       grid = [[
       {1: }                                                 |
@@ -1969,7 +2196,7 @@ describe('TUI', function()
     finally(function()
       os.remove('testF')
     end)
-    local screen = thelpers.screen_setup(
+    local screen = tt.setup_screen(
       0,
       ('"%s" -u NONE -i NONE --cmd "set noswapfile noshowcmd noruler" --cmd "normal iabc" > /dev/null 2>&1 && cat testF && rm testF'):format(
         nvim_prog
@@ -1990,7 +2217,7 @@ describe('TUI', function()
   end)
 
   it('<C-h> #10134', function()
-    local screen = thelpers.setup_child_nvim({
+    local screen = tt.setup_child_nvim({
       '-u',
       'NONE',
       '-i',
@@ -2023,7 +2250,7 @@ describe('TUI', function()
   end)
 
   it('draws line with many trailing spaces correctly #24955', function()
-    local screen = thelpers.setup_child_nvim({
+    local screen = tt.setup_child_nvim({
       '-u',
       'NONE',
       '-i',
@@ -2059,10 +2286,51 @@ describe('TUI', function()
     }
   end)
 
+  it('draws screen lines with leading spaces correctly #29711', function()
+    local screen = tt.setup_child_nvim({
+      '-u',
+      'NONE',
+      '-i',
+      'NONE',
+      '--cmd',
+      'set foldcolumn=6 | call setline(1, ["", repeat("aabb", 1000)]) | echo 42',
+    }, { extra_rows = 10, cols = 66 })
+    screen:expect {
+      grid = [[
+                                                                        |
+            aabbaabbaabbaabbaabbaabbaabbaabbaabbaabbaabbaabbaabbaabbaabb|*12
+            aabbaabbaabbaabbaabbaabbaabbaabbaabbaabbaabbaabbaabbaabba@@@|
+      [No Name] [+]                                   1,0-1          Top|
+      42                                                                |
+      -- TERMINAL --                                                    |
+    ]],
+      attr_ids = {},
+    }
+    feed_data('\12') -- Ctrl-L
+    -- The first line counts as 3 cells.
+    -- For the second line, 6 repeated spaces at the start counts as 2 cells,
+    -- so each screen line of the second line counts as 62 cells.
+    -- After drawing the first line and 8 screen lines of the second line,
+    -- 3 + 8 * 62 = 499 cells have been counted.
+    -- The 6 repeated spaces at the start of the next screen line exceeds the
+    -- 500-cell limit, so the buffer is flushed after these spaces.
+    screen:expect {
+      grid = [[
+                                                                        |
+            aabbaabbaabbaabbaabbaabbaabbaabbaabbaabbaabbaabbaabbaabbaabb|*12
+            aabbaabbaabbaabbaabbaabbaabbaabbaabbaabbaabbaabbaabbaabba@@@|
+      [No Name] [+]                                   1,0-1          Top|
+                                                                        |
+      -- TERMINAL --                                                    |
+    ]],
+      attr_ids = {},
+    }
+  end)
+
   it('no heap-buffer-overflow when changing &columns', function()
     -- Set a different bg colour and change $TERM to something dumber so the `print_spaces()`
     -- codepath in `clear_region()` is hit.
-    local screen = thelpers.setup_child_nvim({
+    local screen = tt.setup_child_nvim({
       '-u',
       'NONE',
       '-i',
@@ -2105,7 +2373,7 @@ end)
 describe('TUI UIEnter/UILeave', function()
   it('fires exactly once, after VimEnter', function()
     clear()
-    local screen = thelpers.setup_child_nvim({
+    local screen = tt.setup_child_nvim({
       '-u',
       'NONE',
       '-i',
@@ -2152,7 +2420,7 @@ describe('TUI FocusGained/FocusLost', function()
   before_each(function()
     clear()
     local child_server = new_pipename()
-    screen = thelpers.setup_child_nvim({
+    screen = tt.setup_child_nvim({
       '--listen',
       child_server,
       '-u',
@@ -2172,7 +2440,7 @@ describe('TUI FocusGained/FocusLost', function()
                                                         |
       {3:-- TERMINAL --}                                    |
     ]])
-    child_session = helpers.connect(child_server)
+    child_session = n.connect(child_server)
     child_session:request(
       'nvim_exec2',
       [[
@@ -2364,14 +2632,14 @@ describe('TUI FocusGained/FocusLost', function()
   end)
 end)
 
--- These tests require `thelpers` because --headless/--embed
+-- These tests require `tt` because --headless/--embed
 -- does not initialize the TUI.
 describe("TUI 't_Co' (terminal colors)", function()
   local screen
 
   local function assert_term_colors(term, colorterm, maxcolors)
     clear({ env = { TERM = term }, args = {} })
-    screen = thelpers.setup_child_nvim({
+    screen = tt.setup_child_nvim({
       '-u',
       'NONE',
       '-i',
@@ -2647,14 +2915,14 @@ describe("TUI 't_Co' (terminal colors)", function()
   end)
 end)
 
--- These tests require `thelpers` because --headless/--embed
+-- These tests require `tt` because --headless/--embed
 -- does not initialize the TUI.
 describe("TUI 'term' option", function()
   local screen
 
   local function assert_term(term_envvar, term_expected)
     clear()
-    screen = thelpers.setup_child_nvim({
+    screen = tt.setup_child_nvim({
       '-u',
       'NONE',
       '-i',
@@ -2669,10 +2937,9 @@ describe("TUI 'term' option", function()
     })
 
     local full_timeout = screen.timeout
-    screen.timeout = 250 -- We want screen:expect() to fail quickly.
     retry(nil, 2 * full_timeout, function() -- Wait for TUI thread to set 'term'.
       feed_data(":echo 'term='.(&term)\n")
-      screen:expect { any = 'term=' .. term_expected }
+      screen:expect { any = 'term=' .. term_expected, timeout = 250 }
     end)
   end
 
@@ -2703,7 +2970,7 @@ describe("TUI 'term' option", function()
   end)
 end)
 
--- These tests require `thelpers` because --headless/--embed
+-- These tests require `tt` because --headless/--embed
 -- does not initialize the TUI.
 describe('TUI', function()
   local screen
@@ -2715,7 +2982,7 @@ describe('TUI', function()
   -- Runs (child) `nvim` in a TTY (:terminal), to start the builtin TUI.
   local function nvim_tui(extra_args)
     clear()
-    screen = thelpers.setup_child_nvim({
+    screen = tt.setup_child_nvim({
       '-u',
       'NONE',
       '-i',
@@ -2796,7 +3063,7 @@ describe('TUI', function()
     ]])
 
     local child_server = new_pipename()
-    screen = thelpers.setup_child_nvim({
+    screen = tt.setup_child_nvim({
       '--listen',
       child_server,
       '-u',
@@ -2816,7 +3083,7 @@ describe('TUI', function()
 
     screen:expect({ any = '%[No Name%]' })
 
-    local child_session = helpers.connect(child_server)
+    local child_session = n.connect(child_server)
     retry(nil, 1000, function()
       eq({
         Tc = true,
@@ -2825,6 +3092,61 @@ describe('TUI', function()
         setrgbb = true,
       }, eval("get(g:, 'xtgettcap', '')"))
       eq({ true, 1 }, { child_session:request('nvim_eval', '&termguicolors') })
+    end)
+  end)
+
+  it('does not query the terminal for truecolor support if $COLORTERM is set', function()
+    clear()
+    exec_lua([[
+      vim.api.nvim_create_autocmd('TermRequest', {
+        callback = function(args)
+          local req = args.data
+          vim.g.termrequest = req
+          local xtgettcap = req:match('^\027P%+q([%x;]+)$')
+          if xtgettcap then
+            local t = {}
+            for cap in vim.gsplit(xtgettcap, ';') do
+              local resp = string.format('\027P1+r%s\027\\', xtgettcap)
+              vim.api.nvim_chan_send(vim.bo[args.buf].channel, resp)
+              t[vim.text.hexdecode(cap)] = true
+            end
+            vim.g.xtgettcap = t
+            return true
+          elseif req:match('^\027P$qm\027\\$') then
+            vim.g.decrqss = true
+          end
+        end,
+      })
+    ]])
+
+    local child_server = new_pipename()
+    screen = tt.setup_child_nvim({
+      '--listen',
+      child_server,
+      '-u',
+      'NONE',
+      '-i',
+      'NONE',
+    }, {
+      env = {
+        VIMRUNTIME = os.getenv('VIMRUNTIME'),
+        -- With COLORTERM=256, Nvim should not query the terminal and should not set 'tgc'
+        COLORTERM = '256',
+        TERM = 'xterm-256colors',
+      },
+    })
+
+    screen:expect({ any = '%[No Name%]' })
+
+    local child_session = n.connect(child_server)
+    retry(nil, 1000, function()
+      local xtgettcap = eval("get(g:, 'xtgettcap', {})")
+      eq(nil, xtgettcap['Tc'])
+      eq(nil, xtgettcap['RGB'])
+      eq(nil, xtgettcap['setrgbf'])
+      eq(nil, xtgettcap['setrgbb'])
+      eq(0, eval([[get(g:, 'decrqss')]]))
+      eq({ true, 0 }, { child_session:request('nvim_eval', '&termguicolors') })
     end)
   end)
 
@@ -2846,7 +3168,7 @@ describe('TUI', function()
     ]])
 
     local child_server = new_pipename()
-    screen = thelpers.setup_child_nvim({
+    screen = tt.setup_child_nvim({
       '--listen',
       child_server,
       -- Use --clean instead of -u NONE to load the osc52 plugin
@@ -2862,7 +3184,7 @@ describe('TUI', function()
 
     screen:expect({ any = '%[No Name%]' })
 
-    local child_session = helpers.connect(child_server)
+    local child_session = n.connect(child_server)
     retry(nil, 1000, function()
       eq('Ms', eval("get(g:, 'xtgettcap', '')"))
       eq({ true, 'OSC 52' }, { child_session:request('nvim_eval', 'g:clipboard.name') })
@@ -2877,7 +3199,7 @@ describe('TUI bg color', function()
     command('highlight clear Normal')
     command('set background=dark') -- set outer Nvim background
     local child_server = new_pipename()
-    local screen = thelpers.setup_child_nvim({
+    local screen = tt.setup_child_nvim({
       '--listen',
       child_server,
       '-u',
@@ -2890,7 +3212,7 @@ describe('TUI bg color', function()
       'set noswapfile',
     })
     screen:expect({ any = '%[No Name%]' })
-    local child_session = helpers.connect(child_server)
+    local child_session = n.connect(child_server)
     retry(nil, nil, function()
       eq({ true, 'dark' }, { child_session:request('nvim_eval', '&background') })
     end)
@@ -2900,7 +3222,7 @@ describe('TUI bg color', function()
     command('highlight clear Normal')
     command('set background=light') -- set outer Nvim background
     local child_server = new_pipename()
-    local screen = thelpers.setup_child_nvim({
+    local screen = tt.setup_child_nvim({
       '--listen',
       child_server,
       '-u',
@@ -2913,7 +3235,7 @@ describe('TUI bg color', function()
       'set noswapfile',
     })
     screen:expect({ any = '%[No Name%]' })
-    local child_session = helpers.connect(child_server)
+    local child_session = n.connect(child_server)
     retry(nil, nil, function()
       eq({ true, 'light' }, { child_session:request('nvim_eval', '&background') })
     end)
@@ -2931,7 +3253,7 @@ describe('TUI bg color', function()
         end,
       })
     ]])
-    thelpers.setup_child_nvim({
+    tt.setup_child_nvim({
       '-u',
       'NONE',
       '-i',
@@ -2947,7 +3269,7 @@ describe('TUI bg color', function()
   end)
 
   it('triggers OptionSet from automatic background processing', function()
-    local screen = thelpers.setup_child_nvim({
+    local screen = tt.setup_child_nvim({
       '-u',
       'NONE',
       '-i',
@@ -2969,16 +3291,20 @@ describe('TUI bg color', function()
   end)
 end)
 
--- These tests require `thelpers` because --headless/--embed
+-- These tests require `tt` because --headless/--embed
 -- does not initialize the TUI.
 describe('TUI as a client', function()
+  after_each(function()
+    os.remove(testlog)
+  end)
+
   it('connects to remote instance (with its own TUI)', function()
     local server_super = spawn_argv(false) -- equivalent to clear()
     local client_super = spawn_argv(true)
 
     set_session(server_super)
     local server_pipe = new_pipename()
-    local screen_server = thelpers.setup_child_nvim({
+    local screen_server = tt.setup_child_nvim({
       '--listen',
       server_pipe,
       '-u',
@@ -3013,7 +3339,7 @@ describe('TUI as a client', function()
     }
 
     set_session(client_super)
-    local screen_client = thelpers.setup_child_nvim({
+    local screen_client = tt.setup_child_nvim({
       '--server',
       server_pipe,
       '--remote-ui',
@@ -3049,7 +3375,7 @@ describe('TUI as a client', function()
 
   it('connects to remote instance (--headless)', function()
     local server = spawn_argv(false) -- equivalent to clear()
-    local client_super = spawn_argv(true)
+    local client_super = spawn_argv(true, { env = { NVIM_LOG_FILE = testlog } })
 
     set_session(server)
     local server_pipe = api.nvim_get_vvar('servername')
@@ -3057,7 +3383,7 @@ describe('TUI as a client', function()
     server:request('nvim_command', 'set notermguicolors')
 
     set_session(client_super)
-    local screen_client = thelpers.setup_child_nvim({
+    local screen_client = tt.setup_child_nvim({
       '--server',
       server_pipe,
       '--remote-ui',
@@ -3092,11 +3418,14 @@ describe('TUI as a client', function()
 
     client_super:close()
     server:close()
+    if is_os('mac') then
+      assert_log('uv_tty_set_mode failed: Unknown system error %-102', testlog)
+    end
   end)
 
   it('throws error when no server exists', function()
     clear()
-    local screen = thelpers.setup_child_nvim({
+    local screen = tt.setup_child_nvim({
       '--server',
       '127.0.0.1:2436546',
       '--remote-ui',
@@ -3117,7 +3446,7 @@ describe('TUI as a client', function()
 
     set_session(server_super)
     local server_pipe = new_pipename()
-    local screen_server = thelpers.setup_child_nvim({
+    local screen_server = tt.setup_child_nvim({
       '--listen',
       server_pipe,
       '-u',
@@ -3161,7 +3490,7 @@ describe('TUI as a client', function()
     }
 
     set_session(client_super)
-    local screen_client = thelpers.setup_child_nvim({
+    local screen_client = tt.setup_child_nvim({
       '--server',
       server_pipe,
       '--remote-ui',

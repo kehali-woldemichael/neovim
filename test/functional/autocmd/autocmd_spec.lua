@@ -1,24 +1,25 @@
-local helpers = require('test.functional.helpers')(after_each)
+local t = require('test.testutil')
+local n = require('test.functional.testnvim')()
 local Screen = require('test.functional.ui.screen')
 
-local assert_visible = helpers.assert_visible
-local assert_alive = helpers.assert_alive
-local dedent = helpers.dedent
-local eq = helpers.eq
-local neq = helpers.neq
-local eval = helpers.eval
-local feed = helpers.feed
-local clear = helpers.clear
-local matches = helpers.matches
-local api = helpers.api
-local pcall_err = helpers.pcall_err
-local fn = helpers.fn
-local expect = helpers.expect
-local command = helpers.command
-local exc_exec = helpers.exc_exec
-local exec_lua = helpers.exec_lua
-local retry = helpers.retry
-local source = helpers.source
+local assert_visible = n.assert_visible
+local assert_alive = n.assert_alive
+local dedent = t.dedent
+local eq = t.eq
+local neq = t.neq
+local eval = n.eval
+local feed = n.feed
+local clear = n.clear
+local matches = t.matches
+local api = n.api
+local pcall_err = t.pcall_err
+local fn = n.fn
+local expect = n.expect
+local command = n.command
+local exc_exec = n.exc_exec
+local exec_lua = n.exec_lua
+local retry = t.retry
+local source = n.source
 
 describe('autocmd', function()
   before_each(clear)
@@ -258,15 +259,6 @@ describe('autocmd', function()
 
     local screen = Screen.new(50, 10)
     screen:attach()
-    screen:set_default_attr_ids({
-      [1] = { bold = true, foreground = Screen.colors.Blue1 },
-      [2] = { background = Screen.colors.LightMagenta },
-      [3] = {
-        background = Screen.colors.LightMagenta,
-        bold = true,
-        foreground = Screen.colors.Blue1,
-      },
-    })
 
     source([[
       function! Doit()
@@ -291,8 +283,8 @@ describe('autocmd', function()
 
     feed(':enew | doautoall User<cr>')
     screen:expect([[
-      {2:bb                                                }|
-      {3:~                                                 }|*4
+      {4:bb                                                }|
+      {11:~                                                 }|*4
       {1:~                                                 }|*4
       ^:enew | doautoall User                            |
     ]])
@@ -317,8 +309,8 @@ describe('autocmd', function()
     command('let g:had_value = v:null')
     feed(':doautoall User<cr>')
     screen:expect([[
-      {2:bb                                                }|
-      {3:~                                                 }|*4
+      {4:bb                                                }|
+      {11:~                                                 }|*4
       {1:~                                                 }|*4
       ^:doautoall User                                   |
     ]])
@@ -342,18 +334,13 @@ describe('autocmd', function()
   it('`aucmd_win` cannot be changed into a normal window #13699', function()
     local screen = Screen.new(50, 10)
     screen:attach()
-    screen:set_default_attr_ids {
-      [1] = { bold = true, foreground = Screen.colors.Blue1 },
-      [2] = { reverse = true },
-      [3] = { bold = true, reverse = true },
-    }
 
     -- Create specific layout and ensure it's left unchanged.
-    -- Use nvim_buf_call on a hidden buffer so aucmd_win is used.
+    -- Use vim._with on a hidden buffer so aucmd_win is used.
     exec_lua [[
       vim.cmd "wincmd s | wincmd _"
       _G.buf = vim.api.nvim_create_buf(true, true)
-      vim.api.nvim_buf_call(_G.buf, function() vim.cmd "wincmd J" end)
+      vim._with({buf = _G.buf}, function() vim.cmd "wincmd J" end)
     ]]
     screen:expect [[
       ^                                                  |
@@ -366,13 +353,38 @@ describe('autocmd', function()
     -- This used to crash after making aucmd_win a normal window via the above.
     exec_lua [[
       vim.cmd "tabnew | tabclose # | wincmd s | wincmd _"
-      vim.api.nvim_buf_call(_G.buf, function() vim.cmd "wincmd K" end)
+      vim._with({buf = _G.buf}, function() vim.cmd "wincmd K" end)
     ]]
     assert_alive()
     screen:expect_unchanged()
 
+    -- Also check with win_splitmove().
+    exec_lua [[
+      vim._with({buf = _G.buf}, function()
+        vim.fn.win_splitmove(vim.fn.winnr(), vim.fn.win_getid(1))
+      end)
+    ]]
+    screen:expect_unchanged()
+
+    -- Also check with nvim_win_set_config().
+    matches(
+      '^Failed to move window %d+ into split$',
+      pcall_err(
+        exec_lua,
+        [[
+          vim._with({buf = _G.buf}, function()
+            vim.api.nvim_win_set_config(0, {
+              vertical = true,
+              win = vim.fn.win_getid(1)
+            })
+          end)
+        ]]
+      )
+    )
+    screen:expect_unchanged()
+
     -- Ensure splitting still works from inside the aucmd_win.
-    exec_lua [[vim.api.nvim_buf_call(_G.buf, function() vim.cmd "split" end)]]
+    exec_lua [[vim._with({buf = _G.buf}, function() vim.cmd "split" end)]]
     screen:expect [[
       ^                                                  |
       {1:~                                                 }|
@@ -391,12 +403,12 @@ describe('autocmd', function()
     eq(
       'editor',
       exec_lua [[
-      vim.cmd "only"
-      vim.api.nvim_buf_call(_G.buf, function()
-        _G.config = vim.api.nvim_win_get_config(0)
-      end)
-      return _G.config.relative
-    ]]
+        vim.cmd "only"
+        vim._with({buf = _G.buf}, function()
+          _G.config = vim.api.nvim_win_get_config(0)
+        end)
+        return _G.config.relative
+      ]]
     )
   end)
 
@@ -437,11 +449,11 @@ describe('autocmd', function()
       pcall_err(
         exec_lua,
         [[
-      vim.api.nvim_buf_call(_G.buf, function()
-        local win = vim.api.nvim_get_current_win()
-        vim.api.nvim_win_close(win, true)
-      end)
-    ]]
+          vim._with({buf = _G.buf}, function()
+            local win = vim.api.nvim_get_current_win()
+            vim.api.nvim_win_close(win, true)
+          end)
+        ]]
       )
     )
     matches(
@@ -449,12 +461,12 @@ describe('autocmd', function()
       pcall_err(
         exec_lua,
         [[
-      vim.api.nvim_buf_call(_G.buf, function()
-        local win = vim.api.nvim_get_current_win()
-        vim.cmd('tabnext')
-        vim.api.nvim_win_close(win, true)
-      end)
-    ]]
+          vim._with({buf = _G.buf}, function()
+            local win = vim.api.nvim_get_current_win()
+            vim.cmd('tabnext')
+            vim.api.nvim_win_close(win, true)
+          end)
+        ]]
       )
     )
     matches(
@@ -462,11 +474,11 @@ describe('autocmd', function()
       pcall_err(
         exec_lua,
         [[
-      vim.api.nvim_buf_call(_G.buf, function()
-        local win = vim.api.nvim_get_current_win()
-        vim.api.nvim_win_hide(win)
-      end)
-    ]]
+          vim._with({buf = _G.buf}, function()
+            local win = vim.api.nvim_get_current_win()
+            vim.api.nvim_win_hide(win)
+          end)
+        ]]
       )
     )
     matches(
@@ -474,12 +486,12 @@ describe('autocmd', function()
       pcall_err(
         exec_lua,
         [[
-      vim.api.nvim_buf_call(_G.buf, function()
-        local win = vim.api.nvim_get_current_win()
-        vim.cmd('tabnext')
-        vim.api.nvim_win_hide(win)
-      end)
-    ]]
+          vim._with({buf = _G.buf}, function()
+            local win = vim.api.nvim_get_current_win()
+            vim.cmd('tabnext')
+            vim.api.nvim_win_hide(win)
+          end)
+        ]]
       )
     )
   end)
@@ -487,9 +499,6 @@ describe('autocmd', function()
   it(':doautocmd does not warn "No matching autocommands" #10689', function()
     local screen = Screen.new(32, 3)
     screen:attach()
-    screen:set_default_attr_ids({
-      [1] = { bold = true, foreground = Screen.colors.Blue1 },
-    })
 
     feed(':doautocmd User Foo<cr>')
     screen:expect {

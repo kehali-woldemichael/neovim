@@ -79,6 +79,17 @@ int main(void)
 }
 " HAVE_PWD_FUNCS)
 
+check_c_source_compiles("
+#include <intrin.h>
+
+int main(void)
+{
+  unsigned long index;
+  unsigned char mask = 0x8000;
+  _BitScanForward64(&index, mask);
+  return 0;
+}
+" HAVE_BITSCANFORWARD64)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "SunOS")
   check_c_source_compiles("
@@ -162,9 +173,7 @@ function(append_target_expression)
     ${ARGN})
 
   set(TARGET_EXPRESSION "$<TARGET_PROPERTY:nvim_bin,${ARG_PROPERTY}>")
-  if(${CMAKE_VERSION} VERSION_GREATER_EQUAL 3.15)
-    set(TARGET_EXPRESSION "$<REMOVE_DUPLICATES:${TARGET_EXPRESSION}>")
-  endif()
+  set(TARGET_EXPRESSION "$<REMOVE_DUPLICATES:${TARGET_EXPRESSION}>")
   set(TARGET_EXPRESSION "${ARG_PREFIX}$<JOIN:${TARGET_EXPRESSION}, ${ARG_PREFIX}>")
 
   set(VERSION_STRING "${VERSION_STRING} ${TARGET_EXPRESSION} " PARENT_SCOPE)
@@ -183,6 +192,6 @@ file(GENERATE
   INPUT "${PROJECT_BINARY_DIR}/cmake.config/auto/versiondef.h.gen")
 
 configure_file (
-  "${PROJECT_SOURCE_DIR}/cmake.config/pathdef.c.in"
-  "${PROJECT_BINARY_DIR}/cmake.config/auto/pathdef.c"
+  "${PROJECT_SOURCE_DIR}/cmake.config/pathdef.h.in"
+  "${PROJECT_BINARY_DIR}/cmake.config/auto/pathdef.h"
   ESCAPE_QUOTES)

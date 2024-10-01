@@ -15,6 +15,7 @@
 #include "nvim/drawscreen.h"
 #include "nvim/extmark.h"
 #include "nvim/fold.h"
+#include "nvim/globals.h"
 #include "nvim/grid.h"
 #include "nvim/grid_defs.h"
 #include "nvim/highlight.h"
@@ -30,9 +31,6 @@
 # include "decoration.c.generated.h"
 #endif
 
-// TODO(bfredl): These should maybe be per-buffer, so that all resources
-// associated with a buffer can be freed when the buffer is unloaded.
-kvec_t(DecorSignHighlight) decor_items = KV_INITIAL_VALUE;
 uint32_t decor_freelist = UINT32_MAX;
 
 // Decorations might be requested to be deleted in a callback in the middle of redrawing.
@@ -184,6 +182,21 @@ void buf_put_decor(buf_T *buf, DecorInline decor, int row, int row2)
   }
 }
 
+/// When displaying signs in the 'number' column, if the width of the number
+/// column is less than 2, then force recomputing the width after placing or
+/// unplacing the first sign in "buf".
+static void may_force_numberwidth_recompute(buf_T *buf, bool unplace)
+{
+  FOR_ALL_TAB_WINDOWS(tp, wp) {
+    if (wp->w_buffer == buf
+        && wp->w_minscwidth == SCL_NUM
+        && (wp->w_p_nu || wp->w_p_rnu)
+        && (unplace || wp->w_nrwidth_width < 2)) {
+      wp->w_nrwidth_line_count = 0;
+    }
+  }
+}
+
 static int sign_add_id = 0;
 void buf_put_decor_sh(buf_T *buf, DecorSignHighlight *sh, int row1, int row2)
 {
@@ -191,6 +204,7 @@ void buf_put_decor_sh(buf_T *buf, DecorSignHighlight *sh, int row1, int row2)
     sh->sign_add_id = sign_add_id++;
     if (sh->text[0]) {
       buf_signcols_count_range(buf, row1, row2, 1, kFalse);
+      may_force_numberwidth_recompute(buf, false);
     }
   }
 }
@@ -218,6 +232,7 @@ void buf_remove_decor_sh(buf_T *buf, int row1, int row2, DecorSignHighlight *sh)
       if (buf_meta_total(buf, kMTMetaSignText)) {
         buf_signcols_count_range(buf, row1, row2, -1, kFalse);
       } else {
+        may_force_numberwidth_recompute(buf, true);
         buf->b_signcols.resized = true;
         buf->b_signcols.max = buf->b_signcols.count[0] = 0;
       }
@@ -274,7 +289,7 @@ static void decor_free_inner(DecorVirtText *vt, uint32_t first_idx)
   while (idx != DECOR_ID_INVALID) {
     DecorSignHighlight *sh = &kv_A(decor_items, idx);
     if (sh->flags & kSHIsSign) {
-      xfree(sh->sign_name);
+      XFREE_CLEAR(sh->sign_name);
     }
     sh->flags = 0;
     if (sh->url != NULL) {
@@ -346,7 +361,12 @@ char *next_virt_text_chunk(VirtText vt, size_t *pos, int *attr)
   for (; text == NULL && *pos < kv_size(vt); (*pos)++) {
     text = kv_A(vt, *pos).text;
     int hl_id = kv_A(vt, *pos).hl_id;
-    *attr = hl_combine_attr(*attr, hl_id > 0 ? syn_id2attr(hl_id) : 0);
+    if (hl_id >= 0) {
+      *attr = MAX(*attr, 0);
+      if (hl_id > 0) {
+        *attr = hl_combine_attr(*attr, syn_id2attr(hl_id));
+      }
+    }
   }
   return text;
 }
@@ -454,21 +474,18 @@ static void decor_range_add_from_inline(DecorState *state, int start_row, int st
   if (decor.ext) {
     DecorVirtText *vt = decor.data.ext.vt;
     while (vt) {
-      decor_range_add_virt(state, start_row, start_col, end_row, end_col, vt, owned,
-                           DECOR_PRIORITY_BASE);
+      decor_range_add_virt(state, start_row, start_col, end_row, end_col, vt, owned);
       vt = vt->next;
     }
     uint32_t idx = decor.data.ext.sh_idx;
     while (idx != DECOR_ID_INVALID) {
       DecorSignHighlight *sh = &kv_A(decor_items, idx);
-      decor_range_add_sh(state, start_row, start_col, end_row, end_col, sh, owned, ns, mark_id,
-                         DECOR_PRIORITY_BASE);
+      decor_range_add_sh(state, start_row, start_col, end_row, end_col, sh, owned, ns, mark_id);
       idx = sh->next;
     }
   } else {
     DecorSignHighlight sh = decor_sh_from_inline(decor.data.hl);
-    decor_range_add_sh(state, start_row, start_col, end_row, end_col, &sh, owned, ns, mark_id,
-                       DECOR_PRIORITY_BASE);
+    decor_range_add_sh(state, start_row, start_col, end_row, end_col, &sh, owned, ns, mark_id);
   }
 }
 
@@ -478,8 +495,7 @@ static void decor_range_insert(DecorState *state, DecorRange range)
   size_t index;
   for (index = kv_size(state->active) - 1; index > 0; index--) {
     DecorRange item = kv_A(state->active, index - 1);
-    if ((item.priority < range.priority)
-        || ((item.priority == range.priority) && (item.subpriority <= range.subpriority))) {
+    if (item.priority <= range.priority) {
       break;
     }
     kv_A(state->active, index) = kv_A(state->active, index - 1);
@@ -488,7 +504,7 @@ static void decor_range_insert(DecorState *state, DecorRange range)
 }
 
 void decor_range_add_virt(DecorState *state, int start_row, int start_col, int end_row, int end_col,
-                          DecorVirtText *vt, bool owned, DecorPriority subpriority)
+                          DecorVirtText *vt, bool owned)
 {
   bool is_lines = vt->flags & kVTIsLines;
   DecorRange range = {
@@ -498,15 +514,13 @@ void decor_range_add_virt(DecorState *state, int start_row, int start_col, int e
     .attr_id = 0,
     .owned = owned,
     .priority = vt->priority,
-    .subpriority = subpriority,
     .draw_col = -10,
   };
   decor_range_insert(state, range);
 }
 
 void decor_range_add_sh(DecorState *state, int start_row, int start_col, int end_row, int end_col,
-                        DecorSignHighlight *sh, bool owned, uint32_t ns, uint32_t mark_id,
-                        DecorPriority subpriority)
+                        DecorSignHighlight *sh, bool owned, uint32_t ns, uint32_t mark_id)
 {
   if (sh->flags & kSHIsSign) {
     return;
@@ -519,7 +533,6 @@ void decor_range_add_sh(DecorState *state, int start_row, int start_col, int end
     .attr_id = 0,
     .owned = owned,
     .priority = sh->priority,
-    .subpriority = subpriority,
     .draw_col = -10,
   };
 
@@ -541,7 +554,7 @@ void decor_range_add_sh(DecorState *state, int start_row, int start_col, int end
 }
 
 /// Initialize the draw_col of a newly-added virtual text item.
-static void decor_init_draw_col(int win_col, bool hidden, DecorRange *item)
+void decor_init_draw_col(int win_col, bool hidden, DecorRange *item)
 {
   DecorVirtText *vt = item->kind == kDecorKindVirtText ? item->data.vt : NULL;
   VirtTextPos pos = decor_virt_pos_kind(item);
@@ -582,7 +595,7 @@ int decor_redraw_col(win_T *wp, int col, int win_col, bool hidden, DecorState *s
       break;
     }
 
-    if (mt_invalid(mark) || mt_end(mark) || !mt_decor_any(mark)) {
+    if (mt_invalid(mark) || mt_end(mark) || !mt_decor_any(mark) || !ns_in_win(mark.ns, wp)) {
       goto next_mark;
     }
 
@@ -726,7 +739,7 @@ void decor_redraw_signs(win_T *wp, buf_T *buf, int row, SignTextAttrs sattrs[], 
     if (mark.pos.row != row) {
       break;
     }
-    if (!mt_end(mark) && !mt_invalid(mark) && mt_decor_sign(mark)) {
+    if (!mt_invalid(mark) && !mt_end(mark) && mt_decor_sign(mark) && ns_in_win(mark.ns, wp)) {
       DecorSignHighlight *sh = decor_find_sign(mt_decor(mark));
       num_text += (sh->text[0] != NUL);
       kv_push(signs, ((SignItem){ sh, mark.id }));
@@ -737,14 +750,15 @@ void decor_redraw_signs(win_T *wp, buf_T *buf, int row, SignTextAttrs sattrs[], 
 
   if (kv_size(signs)) {
     int width = wp->w_minscwidth == SCL_NUM ? 1 : wp->w_scwidth;
-    int idx = MIN(width, num_text) - 1;
+    int len = MIN(width, num_text);
+    int idx = 0;
     qsort((void *)&kv_A(signs, 0), kv_size(signs), sizeof(kv_A(signs, 0)), sign_item_cmp);
 
     for (size_t i = 0; i < kv_size(signs); i++) {
       DecorSignHighlight *sh = kv_A(signs, i).sh;
-      if (idx >= 0 && sh->text[0]) {
+      if (idx < len && sh->text[0]) {
         memcpy(sattrs[idx].text, sh->text, SIGN_WIDTH * sizeof(sattr_T));
-        sattrs[idx--].hl_id = sh->hl_id;
+        sattrs[idx++].hl_id = sh->hl_id;
       }
       if (*num_id == 0) {
         *num_id = sh->number_hl_id;
@@ -787,13 +801,12 @@ static const uint32_t signtext_filter[4] = {[kMTMetaSignText] = kMTFilterSelect 
 /// @param clear  kFalse, kTrue or kNone for an, added/deleted, cleared, or initialized range.
 void buf_signcols_count_range(buf_T *buf, int row1, int row2, int add, TriState clear)
 {
-  if (!buf->b_signcols.autom || !buf_meta_total(buf, kMTMetaSignText)) {
+  if (!buf->b_signcols.autom || row2 < row1 || !buf_meta_total(buf, kMTMetaSignText)) {
     return;
   }
 
   // Allocate an array of integers holding the number of signs in the range.
-  assert(row2 >= row1);
-  int *count = xcalloc(sizeof(int), (size_t)(row2 + 1 - row1));
+  int *count = xcalloc((size_t)(row2 + 1 - row1), sizeof(int));
   MarkTreeIter itr[1];
   MTPair pair = { 0 };
 
@@ -874,8 +887,8 @@ bool decor_redraw_eol(win_T *wp, DecorState *state, int *eol_attr, int eol_col)
 
 static const uint32_t lines_filter[4] = {[kMTMetaLines] = kMTFilterSelect };
 
-/// @param has_fold  whether line "lnum" has a fold, or kNone when not calculated yet
-int decor_virt_lines(win_T *wp, linenr_T lnum, VirtLines *lines, TriState has_fold)
+/// @param apply_folds Only count virtual lines that are not in folds.
+int decor_virt_lines(win_T *wp, int start_row, int end_row, VirtLines *lines, bool apply_folds)
 {
   buf_T *buf = wp->w_buffer;
   if (!buf_meta_total(buf, kMTMetaLines)) {
@@ -884,40 +897,34 @@ int decor_virt_lines(win_T *wp, linenr_T lnum, VirtLines *lines, TriState has_fo
     return 0;
   }
 
-  assert(lnum > 0);
-  bool below_fold = lnum > 1 && hasFoldingWin(wp, lnum - 1, NULL, NULL, true, NULL);
-  if (has_fold == kNone) {
-    has_fold = hasFoldingWin(wp, lnum, NULL, NULL, true, NULL);
-  }
-
-  const int row = lnum - 1;
-  const int start_row = below_fold ? row : MAX(row - 1, 0);
-  const int end_row = has_fold ? row : row + 1;
-  if (start_row >= end_row) {
-    return 0;
-  }
-
   MarkTreeIter itr[1] = { 0 };
-  if (!marktree_itr_get_filter(buf->b_marktree, start_row, 0, end_row, 0, lines_filter, itr)) {
+  if (!marktree_itr_get_filter(buf->b_marktree, MAX(start_row - 1, 0), 0, end_row, 0,
+                               lines_filter, itr)) {
     return 0;
   }
+
+  assert(start_row >= 0);
 
   int virt_lines = 0;
   while (true) {
     MTKey mark = marktree_itr_current(itr);
     DecorVirtText *vt = mt_decor_virt(mark);
-    while (vt) {
-      if (vt->flags & kVTIsLines) {
-        bool above = vt->flags & kVTLinesAbove;
-        int draw_row = mark.pos.row + (above ? 0 : 1);
-        if (draw_row == row) {
-          virt_lines += (int)kv_size(vt->data.virt_lines);
-          if (lines) {
-            kv_splice(*lines, vt->data.virt_lines);
+    if (!mt_invalid(mark) && ns_in_win(mark.ns, wp)) {
+      while (vt) {
+        if (vt->flags & kVTIsLines) {
+          bool above = vt->flags & kVTLinesAbove;
+          int mrow = mark.pos.row;
+          int draw_row = mrow + (above ? 0 : 1);
+          if (draw_row >= start_row && draw_row < end_row
+              && (!apply_folds || !hasFolding(wp, mrow + 1, NULL, NULL))) {
+            virt_lines += (int)kv_size(vt->data.virt_lines);
+            if (lines) {
+              kv_splice(*lines, vt->data.virt_lines);
+            }
           }
         }
+        vt = vt->next;
       }
-      vt = vt->next;
     }
 
     if (!marktree_itr_next_filter(buf->b_marktree, itr, end_row, 0, lines_filter)) {
@@ -931,7 +938,7 @@ int decor_virt_lines(win_T *wp, linenr_T lnum, VirtLines *lines, TriState has_fo
 /// This assumes maximum one entry of each kind, which will not always be the case.
 ///
 /// NB: assumes caller has allocated enough space in dict for all fields!
-void decor_to_dict_legacy(Dictionary *dict, DecorInline decor, bool hl_name, Arena *arena)
+void decor_to_dict_legacy(Dict *dict, DecorInline decor, bool hl_name, Arena *arena)
 {
   DecorSignHighlight sh_hl = DECOR_SIGN_HIGHLIGHT_INIT;
   DecorSignHighlight sh_sign = DECOR_SIGN_HIGHLIGHT_INIT;

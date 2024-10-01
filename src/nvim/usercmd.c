@@ -98,6 +98,7 @@ static const char *command_complete[] = {
   [EXPAND_USER_VARS] = "var",
   [EXPAND_BREAKPOINT] = "breakpoint",
   [EXPAND_SCRIPTNAMES] = "scriptnames",
+  [EXPAND_DIRS_IN_CDPATH] = "dir_in_path",
 };
 
 /// List of names of address types.  Must be alphabetical for completion.
@@ -414,7 +415,7 @@ char *get_user_cmd_complete(expand_T *xp, int idx)
     return NULL;
   }
   char *cmd_compl = get_command_complete(idx);
-  if (cmd_compl == NULL) {
+  if (cmd_compl == NULL || idx == EXPAND_USER_LUA) {
     return "";
   }
   return cmd_compl;
@@ -580,7 +581,7 @@ static void uc_list(char *name, size_t name_len)
         IObuff[len++] = ' ';
       } while ((int64_t)len < 25 - over);
 
-      IObuff[len] = '\0';
+      IObuff[len] = NUL;
       msg_outtrans(IObuff, 0);
 
       if (cmd->uc_luaref != LUA_NOREF) {
@@ -804,9 +805,7 @@ invalid_count:
         }
       }
 
-      if (*def < 0) {
-        *def = 0;
-      }
+      *def = MAX(*def, 0);
     } else if (STRNICMP(attr, "complete", attrlen) == 0) {
       if (val == NULL) {
         semsg(_(e_argument_required_for_str), "-complete");
@@ -831,7 +830,7 @@ invalid_count:
       }
     } else {
       char ch = attr[len];
-      attr[len] = '\0';
+      attr[len] = NUL;
       semsg(_("E181: Invalid attribute: %s"), attr);
       attr[len] = ch;
       return FAIL;
@@ -1274,9 +1273,9 @@ static size_t add_cmd_modifier(char *buf, char *mod_str, bool *multi_mods)
 
   if (buf != NULL) {
     if (*multi_mods) {
-      STRCAT(buf, " ");
+      strcat(buf, " ");
     }
-    STRCAT(buf, mod_str);
+    strcat(buf, mod_str);
   }
 
   *multi_mods = true;
@@ -1364,7 +1363,7 @@ size_t uc_mods(char *buf, const cmdmod_T *cmod, bool quote)
     if (quote) {
       *buf++ = '"';
     }
-    *buf = '\0';
+    *buf = NUL;
   }
 
   // the modifiers that are simple flags
@@ -1724,7 +1723,7 @@ int do_ucmd(exarg_T *eap, bool preview)
     save_current_sctx = current_sctx;
     current_sctx.sc_sid = cmd->uc_script_ctx.sc_sid;
   }
-  do_cmdline(buf, eap->getline, eap->cookie,
+  do_cmdline(buf, eap->ea_getline, eap->cookie,
              DOCMD_VERBOSE|DOCMD_NOWAIT|DOCMD_KEYTYPED);
 
   // Careful: Do not use "cmd" here, it may have become invalid if a user
@@ -1744,25 +1743,24 @@ int do_ucmd(exarg_T *eap, bool preview)
 /// @param buf  Buffer to inspect, or NULL to get global commands.
 ///
 /// @return Map of maps describing commands
-Dictionary commands_array(buf_T *buf)
+Dict commands_array(buf_T *buf, Arena *arena)
 {
-  Dictionary rv = ARRAY_DICT_INIT;
-  char str[20];
   garray_T *gap = (buf == NULL) ? &ucmds : &buf->b_ucmds;
 
+  Dict rv = arena_dict(arena, (size_t)gap->ga_len);
   for (int i = 0; i < gap->ga_len; i++) {
     char arg[2] = { 0, 0 };
-    Dictionary d = ARRAY_DICT_INIT;
+    Dict d = arena_dict(arena, 14);
     ucmd_T *cmd = USER_CMD_GA(gap, i);
 
-    PUT(d, "name", CSTR_TO_OBJ(cmd->uc_name));
-    PUT(d, "definition", CSTR_TO_OBJ(cmd->uc_rep));
-    PUT(d, "script_id", INTEGER_OBJ(cmd->uc_script_ctx.sc_sid));
-    PUT(d, "bang", BOOLEAN_OBJ(!!(cmd->uc_argt & EX_BANG)));
-    PUT(d, "bar", BOOLEAN_OBJ(!!(cmd->uc_argt & EX_TRLBAR)));
-    PUT(d, "register", BOOLEAN_OBJ(!!(cmd->uc_argt & EX_REGSTR)));
-    PUT(d, "keepscript", BOOLEAN_OBJ(!!(cmd->uc_argt & EX_KEEPSCRIPT)));
-    PUT(d, "preview", BOOLEAN_OBJ(!!(cmd->uc_argt & EX_PREVIEW)));
+    PUT_C(d, "name", CSTR_AS_OBJ(cmd->uc_name));
+    PUT_C(d, "definition", CSTR_AS_OBJ(cmd->uc_rep));
+    PUT_C(d, "script_id", INTEGER_OBJ(cmd->uc_script_ctx.sc_sid));
+    PUT_C(d, "bang", BOOLEAN_OBJ(!!(cmd->uc_argt & EX_BANG)));
+    PUT_C(d, "bar", BOOLEAN_OBJ(!!(cmd->uc_argt & EX_TRLBAR)));
+    PUT_C(d, "register", BOOLEAN_OBJ(!!(cmd->uc_argt & EX_REGSTR)));
+    PUT_C(d, "keepscript", BOOLEAN_OBJ(!!(cmd->uc_argt & EX_KEEPSCRIPT)));
+    PUT_C(d, "preview", BOOLEAN_OBJ(!!(cmd->uc_argt & EX_PREVIEW)));
 
     switch (cmd->uc_argt & (EX_EXTRA | EX_NOSPC | EX_NEEDARG)) {
     case 0:
@@ -1776,49 +1774,47 @@ Dictionary commands_array(buf_T *buf)
     case (EX_EXTRA | EX_NOSPC | EX_NEEDARG):
       arg[0] = '1'; break;
     }
-    PUT(d, "nargs", CSTR_TO_OBJ(arg));
+    PUT_C(d, "nargs", CSTR_TO_ARENA_OBJ(arena, arg));
 
     char *cmd_compl = get_command_complete(cmd->uc_compl);
-    PUT(d, "complete", (cmd_compl == NULL
-                        ? NIL : CSTR_TO_OBJ(cmd_compl)));
-    PUT(d, "complete_arg", cmd->uc_compl_arg == NULL
-        ? NIL : CSTR_TO_OBJ(cmd->uc_compl_arg));
+    PUT_C(d, "complete", (cmd_compl == NULL
+                          ? NIL : CSTR_AS_OBJ(cmd_compl)));
+    PUT_C(d, "complete_arg", cmd->uc_compl_arg == NULL
+          ? NIL : CSTR_AS_OBJ(cmd->uc_compl_arg));
 
     Object obj = NIL;
     if (cmd->uc_argt & EX_COUNT) {
       if (cmd->uc_def >= 0) {
-        snprintf(str, sizeof(str), "%" PRId64, cmd->uc_def);
-        obj = CSTR_TO_OBJ(str);    // -count=N
+        obj = STRING_OBJ(arena_printf(arena, "%" PRId64, cmd->uc_def));    // -count=N
       } else {
-        obj = CSTR_TO_OBJ("0");    // -count
+        obj = CSTR_AS_OBJ("0");    // -count
       }
     }
-    PUT(d, "count", obj);
+    PUT_C(d, "count", obj);
 
     obj = NIL;
     if (cmd->uc_argt & EX_RANGE) {
       if (cmd->uc_argt & EX_DFLALL) {
-        obj = CSTR_TO_OBJ("%");    // -range=%
+        obj = STATIC_CSTR_AS_OBJ("%");    // -range=%
       } else if (cmd->uc_def >= 0) {
-        snprintf(str, sizeof(str), "%" PRId64, cmd->uc_def);
-        obj = CSTR_TO_OBJ(str);    // -range=N
+        obj = STRING_OBJ(arena_printf(arena, "%" PRId64, cmd->uc_def));    // -range=N
       } else {
-        obj = CSTR_TO_OBJ(".");    // -range
+        obj = STATIC_CSTR_AS_OBJ(".");    // -range
       }
     }
-    PUT(d, "range", obj);
+    PUT_C(d, "range", obj);
 
     obj = NIL;
     for (int j = 0; addr_type_complete[j].expand != ADDR_NONE; j++) {
       if (addr_type_complete[j].expand != ADDR_LINES
           && addr_type_complete[j].expand == cmd->uc_addr_type) {
-        obj = CSTR_TO_OBJ(addr_type_complete[j].name);
+        obj = CSTR_AS_OBJ(addr_type_complete[j].name);
         break;
       }
     }
-    PUT(d, "addr", obj);
+    PUT_C(d, "addr", obj);
 
-    PUT(rv, cmd->uc_name, DICTIONARY_OBJ(d));
+    PUT_C(rv, cmd->uc_name, DICT_OBJ(d));
   }
   return rv;
 }

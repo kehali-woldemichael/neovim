@@ -446,7 +446,7 @@ static MTNode *marktree_alloc_node(MarkTree *b, bool internal)
 // really meta_inc[kMTMetaCount]
 static void meta_describe_key_inc(uint32_t *meta_inc, MTKey *k)
 {
-  if (!mt_end(*k)) {
+  if (!mt_end(*k) && !mt_invalid(*k)) {
     meta_inc[kMTMetaInline] += (k->flags & MT_FLAG_DECOR_VIRT_TEXT_INLINE) ? 1 : 0;
     meta_inc[kMTMetaLines] += (k->flags & MT_FLAG_DECOR_VIRT_LINES) ? 1 : 0;
     meta_inc[kMTMetaSignHL] += (k->flags & MT_FLAG_DECOR_SIGNHL) ? 1 : 0;
@@ -460,7 +460,7 @@ static void meta_describe_key(uint32_t *meta_inc, MTKey k)
   meta_describe_key_inc(meta_inc, &k);
 }
 
-// if x is internal, asumes x->meta[..] of children are correct
+// if x is internal, assumes x->meta[..] of children are correct
 static void meta_describe_node(uint32_t *meta_node, MTNode *x)
 {
   memset(meta_node, 0, kMTMetaCount * sizeof(meta_node[0]));
@@ -774,14 +774,10 @@ uint64_t marktree_del_itr(MarkTree *b, MarkTreeIter *itr, bool rev)
   return other;
 }
 
-void marktree_revise_flags(MarkTree *b, MarkTreeIter *itr, uint16_t new_flags)
+void marktree_revise_meta(MarkTree *b, MarkTreeIter *itr, MTKey old_key)
 {
-  uint32_t meta_old[4];
-  meta_describe_key(meta_old, rawkey(itr));
-  rawkey(itr).flags &= (uint16_t) ~MT_FLAG_EXTERNAL_MASK;
-  rawkey(itr).flags |= new_flags;
-
-  uint32_t meta_new[4];
+  uint32_t meta_old[4], meta_new[4];
+  meta_describe_key(meta_old, old_key);
   meta_describe_key(meta_new, rawkey(itr));
 
   if (!memcmp(meta_old, meta_new, sizeof(meta_old))) {
@@ -1425,7 +1421,7 @@ bool marktree_itr_get_ext(MarkTree *b, MTPos p, MarkTreeIter *itr, bool last, bo
     }
     if (meta_filter) {
       if (!meta_has(itr->x->meta[itr->i], meta_filter)) {
-        // this takes us to the interal position after the first rejected node
+        // this takes us to the internal position after the first rejected node
         break;
       }
     }
@@ -1831,7 +1827,7 @@ bool marktree_itr_step_overlap(MarkTree *b, MarkTreeIter *itr, MTPair *pair)
       }
       unrelative(itr->pos, &k.pos);
       MTKey start = marktree_lookup(b, id, NULL);
-      if (pos_less(itr->intersect_pos, start.pos)) {
+      if (pos_leq(itr->intersect_pos, start.pos)) {
         continue;
       }
       *pair = mtpair_from(start, k);

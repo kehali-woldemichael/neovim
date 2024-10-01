@@ -3,7 +3,7 @@ local log = require('vim.lsp.log')
 local protocol = require('vim.lsp.protocol')
 local validate, schedule, schedule_wrap = vim.validate, vim.schedule, vim.schedule_wrap
 
-local is_win = uv.os_uname().version:find('Windows')
+local is_win = vim.fn.has('win32') == 1
 
 --- Checks whether a given path exists and is a directory.
 ---@param filename string path to check
@@ -26,7 +26,7 @@ local function format_message_with_content_length(message)
   })
 end
 
----@class vim.lsp.rpc.Headers: {string: any}
+---@class (private) vim.lsp.rpc.Headers: {string: any}
 ---@field content_length integer
 
 --- Parses an LSP Message's header
@@ -130,7 +130,7 @@ local M = {}
 
 --- Mapping of error codes used by the client
 --- @nodoc
-M.client_errors = {
+local client_errors = {
   INVALID_SERVER_MESSAGE = 1,
   INVALID_SERVER_JSON = 2,
   NO_RESULT_CALLBACK_FOUND = 3,
@@ -140,7 +140,12 @@ M.client_errors = {
   SERVER_RESULT_CALLBACK_ERROR = 7,
 }
 
-M.client_errors = vim.tbl_add_reverse_lookup(M.client_errors)
+--- @type table<string,integer> | table<integer,string>
+--- @nodoc
+M.client_errors = vim.deepcopy(client_errors)
+for k, v in pairs(client_errors) do
+  M.client_errors[v] = k
+end
 
 --- Constructs an error message from an LSP error object.
 ---
@@ -193,7 +198,9 @@ function M.rpc_response_error(code, message, data)
   })
 end
 
+--- Dispatchers for LSP message types.
 --- @class vim.lsp.rpc.Dispatchers
+--- @inlinedoc
 --- @field notification fun(method: string, params: table)
 --- @field server_request fun(method: string, params: table): any?, lsp.ResponseError?
 --- @field on_exit fun(code: integer, signal: integer)
@@ -266,15 +273,12 @@ function M.create_read_loop(handle_body, on_no_chunk, on_error)
   end
 end
 
----@private
----@class vim.lsp.rpc.Client
+---@class (private) vim.lsp.rpc.Client
 ---@field message_index integer
 ---@field message_callbacks table<integer, function> dict of message_id to callback
 ---@field notify_reply_callbacks table<integer, function> dict of message_id to callback
 ---@field transport vim.lsp.rpc.Transport
 ---@field dispatchers vim.lsp.rpc.Dispatchers
-
----@class vim.lsp.rpc.Client
 local Client = {}
 
 ---@private
@@ -403,7 +407,9 @@ function Client:handle_body(body)
   end
   log.debug('rpc.receive', decoded)
 
-  if type(decoded.method) == 'string' and decoded.id then
+  if type(decoded) ~= 'table' then
+    self:on_error(M.client_errors.INVALID_SERVER_MESSAGE, decoded)
+  elseif type(decoded.method) == 'string' and decoded.id then
     local err --- @type lsp.ResponseError|nil
     -- Schedule here so that the users functions don't trigger an error and
     -- we can still use the result.
@@ -498,7 +504,7 @@ function Client:handle_body(body)
       if decoded.error then
         decoded.error = setmetatable(decoded.error, {
           __tostring = M.format_rpc_error,
-        }) --- @type table
+        })
       end
       self:try_call(
         M.client_errors.SERVER_RESULT_CALLBACK_ERROR,
@@ -524,7 +530,7 @@ function Client:handle_body(body)
   end
 end
 
----@class vim.lsp.rpc.Transport
+---@class (private) vim.lsp.rpc.Transport
 ---@field write fun(msg: string)
 ---@field is_closing fun(): boolean
 ---@field terminate fun()
@@ -617,22 +623,47 @@ local function merge_dispatchers(dispatchers)
   return merged
 end
 
---- Create a LSP RPC client factory that connects via TCP to the given host and port.
+--- Create a LSP RPC client factory that connects to either:
+---
+---  - a named pipe (windows)
+---  - a domain socket (unix)
+---  - a host and port via TCP
 ---
 --- Return a function that can be passed to the `cmd` field for
 --- |vim.lsp.start_client()| or |vim.lsp.start()|.
 ---
----@param host string host to connect to
----@param port integer port to connect to
+---@param host_or_path string host to connect to or path to a pipe/domain socket
+---@param port integer? TCP port to connect to. If absent the first argument must be a pipe
 ---@return fun(dispatchers: vim.lsp.rpc.Dispatchers): vim.lsp.rpc.PublicClient
-function M.connect(host, port)
+function M.connect(host_or_path, port)
   return function(dispatchers)
     dispatchers = merge_dispatchers(dispatchers)
-    local tcp = assert(uv.new_tcp())
+    local handle = (
+      port == nil
+        and assert(
+          uv.new_pipe(false),
+          string.format('Pipe with name %s could not be opened.', host_or_path)
+        )
+      or assert(uv.new_tcp(), 'Could not create new TCP socket')
+    )
     local closing = false
+    -- Connect returns a PublicClient synchronously so the caller
+    -- can immediately send messages before the connection is established
+    -- -> Need to buffer them until that happens
+    local connected = false
+    -- size should be enough because the client can't really do anything until initialization is done
+    -- which required a response from the server - implying the connection got established
+    local msgbuf = vim.ringbuf(10)
     local transport = {
       write = function(msg)
-        tcp:write(msg)
+        if connected then
+          local _, err = handle:write(msg)
+          if err and not closing then
+            log.error('Error on handle:write: %q', err)
+          end
+        else
+          msgbuf:push(msg)
+        end
       end,
       is_closing = function()
         return closing
@@ -640,18 +671,19 @@ function M.connect(host, port)
       terminate = function()
         if not closing then
           closing = true
-          tcp:shutdown()
-          tcp:close()
+          handle:shutdown()
+          handle:close()
           dispatchers.on_exit(0, 0)
         end
       end,
     }
     local client = new_client(dispatchers, transport)
-    tcp:connect(host, port, function(err)
+    local function on_connect(err)
       if err then
+        local address = port == nil and host_or_path or (host_or_path .. ':' .. port)
         vim.schedule(function()
           vim.notify(
-            string.format('Could not connect to %s:%s, reason: %s', host, port, vim.inspect(err)),
+            string.format('Could not connect to %s, reason: %s', address, vim.inspect(err)),
             vim.log.levels.WARN
           )
         end)
@@ -660,95 +692,41 @@ function M.connect(host, port)
       local handle_body = function(body)
         client:handle_body(body)
       end
-      tcp:read_start(M.create_read_loop(handle_body, transport.terminate, function(read_err)
+      handle:read_start(M.create_read_loop(handle_body, transport.terminate, function(read_err)
         client:on_error(M.client_errors.READ_ERROR, read_err)
       end))
-    end)
+      connected = true
+      for msg in msgbuf do
+        handle:write(msg)
+      end
+    end
+    if port == nil then
+      handle:connect(host_or_path, on_connect)
+    else
+      local info = uv.getaddrinfo(host_or_path, nil)
+      local resolved_host = info and info[1] and info[1].addr or host_or_path
+      handle:connect(resolved_host, port, on_connect)
+    end
 
     return public_client(client)
   end
 end
 
---- Create a LSP RPC client factory that connects via named pipes (Windows)
---- or unix domain sockets (Unix) to the given pipe_path (file path on
---- Unix and name on Windows).
----
---- Return a function that can be passed to the `cmd` field for
---- |vim.lsp.start_client()| or |vim.lsp.start()|.
----
----@param pipe_path string file path of the domain socket (Unix) or name of the named pipe (Windows) to connect to
----@return fun(dispatchers: vim.lsp.rpc.Dispatchers): vim.lsp.rpc.PublicClient
-function M.domain_socket_connect(pipe_path)
-  return function(dispatchers)
-    dispatchers = merge_dispatchers(dispatchers)
-    local pipe =
-      assert(uv.new_pipe(false), string.format('pipe with name %s could not be opened.', pipe_path))
-    local closing = false
-    local transport = {
-      write = vim.schedule_wrap(function(msg)
-        pipe:write(msg)
-      end),
-      is_closing = function()
-        return closing
-      end,
-      terminate = function()
-        if not closing then
-          closing = true
-          pipe:shutdown()
-          pipe:close()
-          dispatchers.on_exit(0, 0)
-        end
-      end,
-    }
-    local client = new_client(dispatchers, transport)
-    pipe:connect(pipe_path, function(err)
-      if err then
-        vim.schedule(function()
-          vim.notify(
-            string.format('Could not connect to :%s, reason: %s', pipe_path, vim.inspect(err)),
-            vim.log.levels.WARN
-          )
-        end)
-        return
-      end
-      local handle_body = function(body)
-        client:handle_body(body)
-      end
-      pipe:read_start(M.create_read_loop(handle_body, transport.terminate, function(read_err)
-        client:on_error(M.client_errors.READ_ERROR, read_err)
-      end))
-    end)
-
-    return public_client(client)
-  end
-end
-
----@class vim.lsp.rpc.ExtraSpawnParams
----@field cwd? string Working directory for the LSP server process
----@field detached? boolean Detach the LSP server process from the current process
----@field env? table<string,string> Additional environment variables for LSP server process. See |vim.system|
+--- Additional context for the LSP server process.
+--- @class vim.lsp.rpc.ExtraSpawnParams
+--- @inlinedoc
+--- @field cwd? string Working directory for the LSP server process
+--- @field detached? boolean Detach the LSP server process from the current process
+--- @field env? table<string,string> Additional environment variables for LSP server process. See |vim.system()|
 
 --- Starts an LSP server process and create an LSP RPC client object to
 --- interact with it. Communication with the spawned process happens via stdio. For
 --- communication via TCP, spawn a process manually and use |vim.lsp.rpc.connect()|
 ---
----@param cmd string[] Command to start the LSP server.
----
----@param dispatchers? vim.lsp.rpc.Dispatchers Dispatchers for LSP message types.
---- Valid dispatcher names are:
----  - `"notification"`
----  - `"server_request"`
----  - `"on_error"`
----  - `"on_exit"`
----
----@param extra_spawn_params? vim.lsp.rpc.ExtraSpawnParams Additional context for the LSP
---- server process. May contain:
----   - {cwd} (string) Working directory for the LSP server process
----   - {detached?} (boolean) Detach the LSP server process from the current process.
----                  Defaults to false on Windows and true otherwise.
----   - {env?} (table) Additional environment variables for LSP server process
----
----@return vim.lsp.rpc.PublicClient? Client RPC object, with these methods:
+--- @param cmd string[] Command to start the LSP server.
+--- @param dispatchers? vim.lsp.rpc.Dispatchers
+--- @param extra_spawn_params? vim.lsp.rpc.ExtraSpawnParams
+--- @return vim.lsp.rpc.PublicClient : Client RPC object, with these methods:
 ---   - `notify()` |vim.lsp.rpc.notify()|
 ---   - `request()` |vim.lsp.rpc.request()|
 ---   - `is_closing()` returns a boolean indicating if the RPC is closing.
@@ -821,9 +799,9 @@ function M.start(cmd, dispatchers, extra_spawn_params)
     else
       sfx = string.format(' with error message: %s', err)
     end
-    local msg = string.format('Spawning language server with cmd: `%s` failed%s', cmd, sfx)
-    vim.notify(msg, vim.log.levels.WARN)
-    return nil
+    local msg =
+      string.format('Spawning language server with cmd: `%s` failed%s', vim.inspect(cmd), sfx)
+    error(msg)
   end
 
   sysobj = sysobj_or_err --[[@as vim.SystemObj]]

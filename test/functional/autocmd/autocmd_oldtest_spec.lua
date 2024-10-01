@@ -1,15 +1,26 @@
-local helpers = require('test.functional.helpers')(after_each)
+local t = require('test.testutil')
+local n = require('test.functional.testnvim')()
 local Screen = require('test.functional.ui.screen')
 
-local clear = helpers.clear
-local eq = helpers.eq
-local api = helpers.api
-local fn = helpers.fn
-local exec = helpers.exec
-local feed = helpers.feed
+local clear = n.clear
+local eq = t.eq
+local api = n.api
+local fn = n.fn
+local exec = n.exec
+local feed = n.feed
+local assert_log = t.assert_log
+local check_close = n.check_close
+local is_os = t.is_os
+
+local testlog = 'Xtest_autocmd_oldtest_log'
 
 describe('oldtests', function()
   before_each(clear)
+
+  after_each(function()
+    check_close()
+    os.remove(testlog)
+  end)
 
   local exec_lines = function(str)
     return fn.split(fn.execute(str), '\n')
@@ -49,6 +60,7 @@ describe('oldtests', function()
   end)
 
   it('should fire on unload buf', function()
+    clear({ env = { NVIM_LOG_FILE = testlog } })
     fn.writefile({ 'Test file Xxx1' }, 'Xxx1')
     fn.writefile({ 'Test file Xxx2' }, 'Xxx2')
     local fname = 'Xtest_functional_autocmd_unload'
@@ -81,15 +93,19 @@ describe('oldtests', function()
     fn.delete('Xxx2')
     fn.delete(fname)
     fn.delete('Xout')
+
+    if is_os('win') then
+      assert_log('stream write failed. RPC canceled; closing channel', testlog)
+    end
   end)
 
   -- oldtest: Test_delete_ml_get_errors()
   it('no ml_get error with TextChanged autocommand and delete', function()
     local screen = Screen.new(75, 10)
     screen:attach()
-    screen:set_default_attr_ids({
-      [1] = { background = Screen.colors.Cyan },
-    })
+    screen:add_extra_attr_ids {
+      [100] = { background = Screen.colors.Cyan1 },
+    }
     exec([[
       set noshowcmd noruler scrolloff=0
       source test/old/testdir/samples/matchparen.vim
@@ -104,9 +120,9 @@ describe('oldtests', function()
               }                                                                  |
               const auto &themes = _forPeer->owner().cloudThemes();              |
               const auto theme = themes.themeForEmoji(themeEmoji);               |
-              if (!theme) {1:{}                                                      |
+              if (!theme) {100:{}                                                      |
                       return nonCustom;                                          |
-              {1:^}}                                                                  |
+              {100:^}}                                                                  |
       353 fewer lines                                                            |
     ]],
     }

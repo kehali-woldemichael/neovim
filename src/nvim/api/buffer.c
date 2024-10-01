@@ -39,6 +39,7 @@
 #include "nvim/memory_defs.h"
 #include "nvim/move.h"
 #include "nvim/ops.h"
+#include "nvim/option_vars.h"
 #include "nvim/pos_defs.h"
 #include "nvim/state_defs.h"
 #include "nvim/types_defs.h"
@@ -50,9 +51,8 @@
 # include "api/buffer.c.generated.h"
 #endif
 
-/// \defgroup api-buffer
-///
-/// \brief For more information on buffers, see |buffers|
+/// @brief <pre>help
+/// For more information on buffers, see |buffers|.
 ///
 /// Unloaded Buffers: ~
 ///
@@ -64,6 +64,7 @@
 ///
 /// You can use |nvim_buf_is_loaded()| or |nvim_buf_line_count()| to check
 /// whether a buffer is loaded.
+/// </pre>
 
 /// Returns the number of lines in the given buffer.
 ///
@@ -229,19 +230,6 @@ Boolean nvim_buf_detach(uint64_t channel_id, Buffer buffer, Error *err)
   return true;
 }
 
-void nvim__buf_redraw_range(Buffer buffer, Integer first, Integer last, Error *err)
-{
-  buf_T *buf = find_buffer_by_handle(buffer, err);
-  if (!buf) {
-    return;
-  }
-  if (last < 0) {
-    last = buf->b_ml.ml_line_count;
-  }
-
-  redraw_buf_range_later(buf, (linenr_T)first + 1, (linenr_T)last);
-}
-
 /// Gets a line-range from the buffer.
 ///
 /// Indexing is zero-based, end-exclusive. Negative indices are interpreted
@@ -325,7 +313,8 @@ ArrayOf(String) nvim_buf_get_lines(uint64_t channel_id,
 /// @param replacement      Array of lines to use as replacement
 /// @param[out] err         Error details, if any
 void nvim_buf_set_lines(uint64_t channel_id, Buffer buffer, Integer start, Integer end,
-                        Boolean strict_indexing, ArrayOf(String) replacement, Error *err)
+                        Boolean strict_indexing, ArrayOf(String) replacement, Arena *arena,
+                        Error *err)
   FUNC_API_SINCE(1)
   FUNC_API_TEXTLOCK_ALLOW_CMDWIN
 {
@@ -360,14 +349,14 @@ void nvim_buf_set_lines(uint64_t channel_id, Buffer buffer, Integer start, Integ
   size_t new_len = replacement.size;
   size_t old_len = (size_t)(end - start);
   ptrdiff_t extra = 0;  // lines added to text, can be negative
-  char **lines = (new_len != 0) ? xcalloc(new_len, sizeof(char *)) : NULL;
+  char **lines = (new_len != 0) ? arena_alloc(arena, new_len * sizeof(char *), true) : NULL;
 
   for (size_t i = 0; i < new_len; i++) {
     const String l = replacement.items[i].data.string;
 
     // Fill lines[i] with l's contents. Convert NULs to newlines as required by
     // NL-used-for-NUL.
-    lines[i] = xmemdupz(l.data, l.size);
+    lines[i] = arena_memdupz(arena, l.data, l.size);
     memchrsub(lines[i], NUL, NL, l.size);
   }
 
@@ -412,15 +401,12 @@ void nvim_buf_set_lines(uint64_t channel_id, Buffer buffer, Integer start, Integ
       goto end;
     });
 
-    if (ml_replace_buf(buf, (linenr_T)lnum, lines[i], false) == FAIL) {
+    if (ml_replace_buf(buf, (linenr_T)lnum, lines[i], false, true) == FAIL) {
       api_set_error(err, kErrorTypeException, "Failed to replace line");
       goto end;
     }
 
     inserted_bytes += (bcount_t)strlen(lines[i]) + 1;
-    // Mark lines that haven't been passed to the buffer as they need
-    // to be freed later
-    lines[i] = NULL;
   }
 
   // Now we may need to insert the remaining new old_len
@@ -438,9 +424,6 @@ void nvim_buf_set_lines(uint64_t channel_id, Buffer buffer, Integer start, Integ
 
     inserted_bytes += (bcount_t)strlen(lines[i]) + 1;
 
-    // Same as with replacing, but we also need to free lines
-    xfree(lines[i]);
-    lines[i] = NULL;
     extra++;
   }
 
@@ -463,11 +446,6 @@ void nvim_buf_set_lines(uint64_t channel_id, Buffer buffer, Integer start, Integ
   }
 
 end:
-  for (size_t i = 0; i < new_len; i++) {
-    xfree(lines[i]);
-  }
-
-  xfree(lines);
   try_end(err);
 }
 
@@ -484,12 +462,8 @@ end:
 /// = row` and `start_col = end_col = col`. To delete the text in a range, use
 /// `replacement = {}`.
 ///
-/// Prefer |nvim_buf_set_lines()| if you are only adding or deleting entire lines.
-///
-/// Prefer |nvim_put()| if you want to insert text at the cursor position.
-///
-/// @see |nvim_buf_set_lines()|
-/// @see |nvim_put()|
+/// @note Prefer |nvim_buf_set_lines()| (for performance) to add or delete entire lines.
+/// @note Prefer |nvim_paste()| or |nvim_put()| to insert (instead of replace) text at cursor.
 ///
 /// @param channel_id
 /// @param buffer           Buffer handle, or 0 for current buffer
@@ -500,7 +474,8 @@ end:
 /// @param replacement      Array of lines to use as replacement
 /// @param[out] err         Error details, if any
 void nvim_buf_set_text(uint64_t channel_id, Buffer buffer, Integer start_row, Integer start_col,
-                       Integer end_row, Integer end_col, ArrayOf(String) replacement, Error *err)
+                       Integer end_row, Integer end_col, ArrayOf(String) replacement, Arena *arena,
+                       Error *err)
   FUNC_API_SINCE(7)
   FUNC_API_TEXTLOCK_ALLOW_CMDWIN
 {
@@ -535,33 +510,31 @@ void nvim_buf_set_text(uint64_t channel_id, Buffer buffer, Integer start_row, In
     return;
   });
 
-  char *str_at_start = NULL;
-  char *str_at_end = NULL;
-
-  // Another call to ml_get_buf() may free the line, so make a copy.
-  str_at_start = xstrdup(ml_get_buf(buf, (linenr_T)start_row));
-  size_t len_at_start = strlen(str_at_start);
-  start_col = start_col < 0 ? (int64_t)len_at_start + start_col + 1 : start_col;
-  VALIDATE_RANGE((start_col >= 0 && (size_t)start_col <= len_at_start), "start_col", {
-    goto early_end;
+  // Another call to ml_get_buf() may free the lines, so we make copies
+  char *str_at_start = ml_get_buf(buf, (linenr_T)start_row);
+  colnr_T len_at_start = ml_get_buf_len(buf, (linenr_T)start_row);
+  str_at_start = arena_memdupz(arena, str_at_start, (size_t)len_at_start);
+  start_col = start_col < 0 ? len_at_start + start_col + 1 : start_col;
+  VALIDATE_RANGE((start_col >= 0 && start_col <= len_at_start), "start_col", {
+    return;
   });
 
-  // Another call to ml_get_buf() may free the line, so make a copy.
-  str_at_end = xstrdup(ml_get_buf(buf, (linenr_T)end_row));
-  size_t len_at_end = strlen(str_at_end);
-  end_col = end_col < 0 ? (int64_t)len_at_end + end_col + 1 : end_col;
-  VALIDATE_RANGE((end_col >= 0 && (size_t)end_col <= len_at_end), "end_col", {
-    goto early_end;
+  char *str_at_end = ml_get_buf(buf, (linenr_T)end_row);
+  colnr_T len_at_end = ml_get_buf_len(buf, (linenr_T)end_row);
+  str_at_end = arena_memdupz(arena, str_at_end, (size_t)len_at_end);
+  end_col = end_col < 0 ? len_at_end + end_col + 1 : end_col;
+  VALIDATE_RANGE((end_col >= 0 && end_col <= len_at_end), "end_col", {
+    return;
   });
 
   VALIDATE((start_row <= end_row && !(end_row == start_row && start_col > end_col)),
            "%s", "'start' is higher than 'end'", {
-    goto early_end;
+    return;
   });
 
   bool disallow_nl = (channel_id != VIML_INTERNAL_CALL);
   if (!check_string_array(replacement, "replacement string", disallow_nl, err)) {
-    goto early_end;
+    return;
   }
 
   size_t new_len = replacement.size;
@@ -573,12 +546,10 @@ void nvim_buf_set_text(uint64_t channel_id, Buffer buffer, Integer start_row, In
   if (start_row == end_row) {
     old_byte = (bcount_t)end_col - start_col;
   } else {
-    old_byte += (bcount_t)len_at_start - start_col;
+    old_byte += len_at_start - start_col;
     for (int64_t i = 1; i < end_row - start_row; i++) {
       int64_t lnum = start_row + i;
-
-      const char *bufline = ml_get_buf(buf, (linenr_T)lnum);
-      old_byte += (bcount_t)(strlen(bufline)) + 1;
+      old_byte += ml_get_buf_len(buf, (linenr_T)lnum) + 1;
     }
     old_byte += (bcount_t)end_col + 1;
   }
@@ -587,11 +558,11 @@ void nvim_buf_set_text(uint64_t channel_id, Buffer buffer, Integer start_row, In
   String last_item = replacement.items[replacement.size - 1].data.string;
 
   size_t firstlen = (size_t)start_col + first_item.size;
-  size_t last_part_len = len_at_end - (size_t)end_col;
+  size_t last_part_len = (size_t)len_at_end - (size_t)end_col;
   if (replacement.size == 1) {
     firstlen += last_part_len;
   }
-  char *first = xmallocz(firstlen);
+  char *first = arena_allocz(arena, firstlen);
   char *last = NULL;
   memcpy(first, str_at_start, (size_t)start_col);
   memcpy(first + start_col, first_item.data, first_item.size);
@@ -599,13 +570,13 @@ void nvim_buf_set_text(uint64_t channel_id, Buffer buffer, Integer start_row, In
   if (replacement.size == 1) {
     memcpy(first + start_col + first_item.size, str_at_end + end_col, last_part_len);
   } else {
-    last = xmallocz(last_item.size + last_part_len);
+    last = arena_allocz(arena, last_item.size + last_part_len);
     memcpy(last, last_item.data, last_item.size);
     memchrsub(last, NUL, NL, last_item.size);
     memcpy(last + last_item.size, str_at_end + end_col, last_part_len);
   }
 
-  char **lines = xcalloc(new_len, sizeof(char *));
+  char **lines = arena_alloc(arena, new_len * sizeof(char *), true);
   lines[0] = first;
   new_byte += (bcount_t)(first_item.size);
   for (size_t i = 1; i < new_len - 1; i++) {
@@ -613,7 +584,7 @@ void nvim_buf_set_text(uint64_t channel_id, Buffer buffer, Integer start_row, In
 
     // Fill lines[i] with l's contents. Convert NULs to newlines as required by
     // NL-used-for-NUL.
-    lines[i] = xmemdupz(l.data, l.size);
+    lines[i] = arena_memdupz(arena, l.data, l.size);
     memchrsub(lines[i], NUL, NL, l.size);
     new_byte += (bcount_t)(l.size) + 1;
   }
@@ -665,13 +636,10 @@ void nvim_buf_set_text(uint64_t channel_id, Buffer buffer, Integer start_row, In
       goto end;
     });
 
-    if (ml_replace_buf(buf, (linenr_T)lnum, lines[i], false) == FAIL) {
+    if (ml_replace_buf(buf, (linenr_T)lnum, lines[i], false, true) == FAIL) {
       api_set_error(err, kErrorTypeException, "Failed to replace line");
       goto end;
     }
-    // Mark lines that haven't been passed to the buffer as they need
-    // to be freed later
-    lines[i] = NULL;
   }
 
   // Now we may need to insert the remaining new old_len
@@ -687,9 +655,6 @@ void nvim_buf_set_text(uint64_t channel_id, Buffer buffer, Integer start_row, In
       goto end;
     }
 
-    // Same as with replacing, but we also need to free lines
-    xfree(lines[i]);
-    lines[i] = NULL;
     extra++;
   }
 
@@ -722,15 +687,7 @@ void nvim_buf_set_text(uint64_t channel_id, Buffer buffer, Integer start_row, In
   }
 
 end:
-  for (size_t i = 0; i < new_len; i++) {
-    xfree(lines[i]);
-  }
-  xfree(lines);
   try_end(err);
-
-early_end:
-  xfree(str_at_start);
-  xfree(str_at_end);
 }
 
 /// Gets a range from the buffer.
@@ -900,12 +857,12 @@ Integer nvim_buf_get_changedtick(Buffer buffer, Error *err)
 
 /// Gets a list of buffer-local |mapping| definitions.
 ///
-/// @param  mode       Mode short-name ("n", "i", "v", ...)
 /// @param  buffer     Buffer handle, or 0 for current buffer
+/// @param  mode       Mode short-name ("n", "i", "v", ...)
 /// @param[out]  err   Error details, if any
 /// @returns Array of |maparg()|-like dictionaries describing mappings.
 ///          The "buffer" key holds the associated buffer handle.
-ArrayOf(Dictionary) nvim_buf_get_keymap(Buffer buffer, String mode, Arena *arena, Error *err)
+ArrayOf(Dict) nvim_buf_get_keymap(Buffer buffer, String mode, Arena *arena, Error *err)
   FUNC_API_SINCE(3)
 {
   buf_T *buf = find_buffer_by_handle(buffer, err);
@@ -981,7 +938,7 @@ void nvim_buf_del_var(Buffer buffer, String name, Error *err)
 /// @param buffer     Buffer handle, or 0 for current buffer
 /// @param[out] err   Error details, if any
 /// @return Buffer name
-String nvim_buf_get_name(Buffer buffer, Arena *arena, Error *err)
+String nvim_buf_get_name(Buffer buffer, Error *err)
   FUNC_API_SINCE(1)
 {
   String rv = STRING_INIT;
@@ -994,7 +951,7 @@ String nvim_buf_get_name(Buffer buffer, Arena *arena, Error *err)
   return cstr_as_string(buf->b_ffname);
 }
 
-/// Sets the full file name for a buffer
+/// Sets the full file name for a buffer, like |:file_f|
 ///
 /// @param buffer     Buffer handle, or 0 for current buffer
 /// @param name       Buffer name
@@ -1010,11 +967,22 @@ void nvim_buf_set_name(Buffer buffer, String name, Error *err)
 
   try_start();
 
+  const bool is_curbuf = buf == curbuf;
+  const int save_acd = p_acd;
+  if (!is_curbuf) {
+    // Temporarily disable 'autochdir' when setting file name for another buffer.
+    p_acd = false;
+  }
+
   // Using aucmd_*: autocommands will be executed by rename_buffer
   aco_save_T aco;
   aucmd_prepbuf(&aco, buf);
   int ren_ret = rename_buffer(name.data);
   aucmd_restbuf(&aco);
+
+  if (!is_curbuf) {
+    p_acd = save_acd;
+  }
 
   if (try_end(err)) {
     return;
@@ -1211,12 +1179,12 @@ ArrayOf(Integer, 2) nvim_buf_get_mark(Buffer buffer, String name, Arena *arena, 
   return rv;
 }
 
-/// call a function with buffer as temporary current buffer
+/// Call a function with buffer as temporary current buffer.
 ///
 /// This temporarily switches current buffer to "buffer".
-/// If the current window already shows "buffer", the window is not switched
+/// If the current window already shows "buffer", the window is not switched.
 /// If a window inside the current tabpage (including a float) already shows the
-/// buffer One of these windows will be set as current window temporarily.
+/// buffer, then one of these windows will be set as current window temporarily.
 /// Otherwise a temporary scratch window (called the "autocmd window" for
 /// historical reasons) will be used.
 ///
@@ -1248,14 +1216,15 @@ Object nvim_buf_call(Buffer buffer, LuaRef fun, Error *err)
   return res;
 }
 
-Dictionary nvim__buf_stats(Buffer buffer, Arena *arena, Error *err)
+/// @nodoc
+Dict nvim__buf_stats(Buffer buffer, Arena *arena, Error *err)
 {
   buf_T *buf = find_buffer_by_handle(buffer, err);
   if (!buf) {
-    return (Dictionary)ARRAY_DICT_INIT;
+    return (Dict)ARRAY_DICT_INIT;
   }
 
-  Dictionary rv = arena_dict(arena, 7);
+  Dict rv = arena_dict(arena, 7);
   // Number of times the cached line was flushed.
   // This should generally not increase while editing the same
   // line in the same mode.
@@ -1294,10 +1263,13 @@ static void fix_cursor(win_T *win, linenr_T lo, linenr_T hi, linenr_T extra)
     } else if (extra < 0) {
       check_cursor_lnum(win);
     }
-    check_cursor_col_win(win);
+    check_cursor_col(win);
     changed_cline_bef_curs(win);
+    win->w_valid &= ~(VALID_BOTLINE_AP);
+    update_topline(win);
+  } else {
+    invalidate_botline(win);
   }
-  invalidate_botline(win);
 }
 
 /// Fix cursor position after replacing text
@@ -1332,7 +1304,7 @@ static void fix_cursor_cols(win_T *win, linenr_T start_row, colnr_T start_col, l
 
     // it's easier to work with a single value here.
     // col and coladd are fixed by a later call
-    // to check_cursor_col_win when necessary
+    // to check_cursor_col when necessary
     win->w_cursor.col += win->w_cursor.coladd;
     win->w_cursor.coladd = 0;
 
@@ -1347,7 +1319,7 @@ static void fix_cursor_cols(win_T *win, linenr_T start_row, colnr_T start_col, l
       // it already (in case virtualedit is active)
       // column might be additionally adjusted below
       // to keep it inside col range if needed
-      colnr_T len = (colnr_T)strlen(ml_get_buf(win->w_buffer, new_end_row));
+      colnr_T len = ml_get_buf_len(win->w_buffer, new_end_row);
       if (win->w_cursor.col < len) {
         win->w_cursor.col = len;
       }
@@ -1368,7 +1340,7 @@ static void fix_cursor_cols(win_T *win, linenr_T start_row, colnr_T start_col, l
     }
   }
 
-  check_cursor_col_win(win);
+  check_cursor_col(win);
   changed_cline_bef_curs(win);
   invalidate_botline(win);
 }
@@ -1399,7 +1371,7 @@ static inline void init_line_array(lua_State *lstate, Array *a, size_t size, Are
 /// @param s           String to push
 /// @param len         Size of string
 /// @param idx         0-based index to place s (only used for Lua)
-/// @param replace_nl  Replace newlines ('\n') with null ('\0')
+/// @param replace_nl  Replace newlines ('\n') with null (NUL)
 static void push_linestr(lua_State *lstate, Array *a, const char *s, size_t len, int idx,
                          bool replace_nl, Arena *arena)
 {
@@ -1408,7 +1380,7 @@ static void push_linestr(lua_State *lstate, Array *a, const char *s, size_t len,
     if (s && replace_nl && strchr(s, '\n')) {
       // TODO(bfredl): could manage scratch space in the arena, for the NUL case
       char *tmp = xmemdupz(s, len);
-      strchrsub(tmp, '\n', '\0');
+      strchrsub(tmp, '\n', NUL);
       lua_pushlstring(lstate, tmp, len);
       xfree(tmp);
     } else {
@@ -1421,7 +1393,7 @@ static void push_linestr(lua_State *lstate, Array *a, const char *s, size_t len,
       str = CBUF_TO_ARENA_STR(arena, s, len);
       if (replace_nl) {
         // Vim represents NULs as NLs, but this may confuse clients.
-        strchrsub(str.data, '\n', '\0');
+        strchrsub(str.data, '\n', NUL);
       }
     }
 
@@ -1447,6 +1419,7 @@ void buf_collect_lines(buf_T *buf, size_t n, linenr_T start, int start_idx, bool
   for (size_t i = 0; i < n; i++) {
     linenr_T lnum = start + (linenr_T)i;
     char *bufstr = ml_get_buf(buf, lnum);
-    push_linestr(lstate, l, bufstr, strlen(bufstr), start_idx + (int)i, replace_nl, arena);
+    size_t bufstrlen = (size_t)ml_get_buf_len(buf, lnum);
+    push_linestr(lstate, l, bufstr, bufstrlen, start_idx + (int)i, replace_nl, arena);
   }
 }

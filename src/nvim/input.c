@@ -14,6 +14,7 @@
 #include "nvim/highlight_defs.h"
 #include "nvim/input.h"
 #include "nvim/keycodes.h"
+#include "nvim/math.h"
 #include "nvim/mbyte.h"
 #include "nvim/memory.h"
 #include "nvim/message.h"
@@ -21,6 +22,7 @@
 #include "nvim/os/input.h"
 #include "nvim/state_defs.h"
 #include "nvim/ui.h"
+#include "nvim/vim_defs.h"
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "input.c.generated.h"  // IWYU pragma: export
@@ -35,7 +37,7 @@
 /// @param[in]  str  Prompt: question to ask user. Is always followed by
 ///                  " (y/n)?".
 /// @param[in]  direct  Determines what function to use to get user input. If
-///                     true then os_inchar() will be used, otherwise vgetc().
+///                     true then input_get() will be used, otherwise vgetc().
 ///                     I.e. when direct is true then characters are obtained
 ///                     directly from the user without buffers involved.
 ///
@@ -109,7 +111,7 @@ int get_keystroke(MultiQueue *events)
 
     // First time: blocking wait.  Second time: wait up to 100ms for a
     // terminal code to complete.
-    n = os_inchar(buf + len, maxlen, len == 0 ? -1 : 100, 0, events);
+    n = input_get(buf + len, maxlen, len == 0 ? -1 : 100, 0, events);
     if (n > 0) {
       // Replace zero and K_SPECIAL by a special key code.
       n = fix_input_buffer(buf + len, n);
@@ -180,10 +182,9 @@ int get_number(int colon, bool *mouse_used)
     ui_cursor_goto(msg_row, msg_col);
     int c = safe_vgetc();
     if (ascii_isdigit(c)) {
-      if (n > INT_MAX / 10) {
+      if (vim_append_digit_int(&n, c - '0') == FAIL) {
         return 0;
       }
-      n = n * 10 + c - '0';
       msg_putchar(c);
       typed++;
     } else if (c == K_DEL || c == K_KDEL || c == K_BS || c == Ctrl_H) {

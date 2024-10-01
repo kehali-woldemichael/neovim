@@ -1,11 +1,12 @@
-local helpers = require('test.functional.helpers')(after_each)
+local t = require('test.testutil')
+local n = require('test.functional.testnvim')()
 
-local clear = helpers.clear
-local eq = helpers.eq
-local eval = helpers.eval
-local fn = helpers.fn
-local api = helpers.api
-local exc_exec = helpers.exc_exec
+local clear = n.clear
+local eq = t.eq
+local eval = n.eval
+local fn = n.fn
+local api = n.api
+local exc_exec = n.exc_exec
 
 describe('printf()', function()
   before_each(clear)
@@ -83,10 +84,13 @@ describe('printf()', function()
       end
       api.nvim_del_var('__result')
     end
+    check_printf('v:_null_string', true)
     check_printf('v:_null_list', true)
     check_printf('v:_null_dict', true)
+    check_printf('v:_null_blob', true)
     check_printf('[]')
     check_printf('{}')
+    check_printf('0z')
     check_printf('function("tr", ["a"])')
   end)
 end)

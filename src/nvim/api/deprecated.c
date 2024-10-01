@@ -20,6 +20,9 @@
 #include "nvim/lua/executor.h"
 #include "nvim/memory.h"
 #include "nvim/memory_defs.h"
+#include "nvim/msgpack_rpc/channel.h"
+#include "nvim/msgpack_rpc/channel_defs.h"
+#include "nvim/msgpack_rpc/unpacker.h"
 #include "nvim/option.h"
 #include "nvim/option_defs.h"
 #include "nvim/pos_defs.h"
@@ -32,8 +35,8 @@
 /// @deprecated Use nvim_exec2() instead.
 /// @see nvim_exec2
 String nvim_exec(uint64_t channel_id, String src, Boolean output, Error *err)
-  FUNC_API_SINCE(7)
-  FUNC_API_DEPRECATED_SINCE(11)
+  FUNC_API_SINCE(7) FUNC_API_DEPRECATED_SINCE(11)
+  FUNC_API_RET_ALLOC
 {
   Dict(exec_opts) opts = { .output = output };
   return exec_impl(channel_id, src, &opts, err);
@@ -42,8 +45,8 @@ String nvim_exec(uint64_t channel_id, String src, Boolean output, Error *err)
 /// @deprecated
 /// @see nvim_exec2
 String nvim_command_output(uint64_t channel_id, String command, Error *err)
-  FUNC_API_SINCE(1)
-  FUNC_API_DEPRECATED_SINCE(7)
+  FUNC_API_SINCE(1) FUNC_API_DEPRECATED_SINCE(7)
+  FUNC_API_RET_ALLOC
 {
   Dict(exec_opts) opts = { .output = true };
   return exec_impl(channel_id, command, &opts, err);
@@ -61,8 +64,7 @@ Object nvim_execute_lua(String code, Array args, Arena *arena, Error *err)
 
 /// Gets the buffer number
 ///
-/// @deprecated The buffer number now is equal to the object id,
-///             so there is no need to use this function.
+/// @deprecated The buffer number now is equal to the object id
 ///
 /// @param buffer     Buffer handle, or 0 for current buffer
 /// @param[out] err   Error details, if any
@@ -100,8 +102,7 @@ void nvim_buf_clear_highlight(Buffer buffer, Integer ns_id, Integer line_start, 
 
 /// Set the virtual text (annotation) for a buffer line.
 ///
-/// @deprecated use nvim_buf_set_extmark to use full virtual text
-///             functionality.
+/// @deprecated use nvim_buf_set_extmark to use full virtual text functionality.
 ///
 /// The text will be placed after the buffer text. Virtual text will never
 /// cause reflow, rather virtual text will be truncated at the end of the screen
@@ -119,7 +120,7 @@ void nvim_buf_clear_highlight(Buffer buffer, Integer ns_id, Integer line_start, 
 /// virtual text, the allocated id is then returned.
 ///
 /// @param buffer     Buffer handle, or 0 for current buffer
-/// @param ns_id      Namespace to use or 0 to create a namespace,
+/// @param src_id     Namespace to use or 0 to create a namespace,
 ///                   or -1 for a ungrouped annotation
 /// @param line       Line to annotate with virtual text (zero-indexed)
 /// @param chunks     A list of [text, hl_group] arrays, each representing a
@@ -182,11 +183,11 @@ Integer nvim_buf_set_virtual_text(Buffer buffer, Integer src_id, Integer line, A
 /// @param[out] err Error details, if any
 /// @return Highlight definition map
 /// @see nvim_get_hl_by_name
-Dictionary nvim_get_hl_by_id(Integer hl_id, Boolean rgb, Arena *arena, Error *err)
+Dict nvim_get_hl_by_id(Integer hl_id, Boolean rgb, Arena *arena, Error *err)
   FUNC_API_SINCE(3)
   FUNC_API_DEPRECATED_SINCE(9)
 {
-  Dictionary dic = ARRAY_DICT_INIT;
+  Dict dic = ARRAY_DICT_INIT;
   VALIDATE_INT((syn_get_final_id((int)hl_id) != 0), "highlight id", hl_id, {
     return dic;
   });
@@ -203,11 +204,11 @@ Dictionary nvim_get_hl_by_id(Integer hl_id, Boolean rgb, Arena *arena, Error *er
 /// @param[out] err Error details, if any
 /// @return Highlight definition map
 /// @see nvim_get_hl_by_id
-Dictionary nvim_get_hl_by_name(String name, Boolean rgb, Arena *arena, Error *err)
+Dict nvim_get_hl_by_name(String name, Boolean rgb, Arena *arena, Error *err)
   FUNC_API_SINCE(3)
   FUNC_API_DEPRECATED_SINCE(9)
 {
-  Dictionary result = ARRAY_DICT_INIT;
+  Dict result = ARRAY_DICT_INIT;
   int id = syn_name2id(name.data);
 
   VALIDATE_S((id != 0), "highlight name", name.data, {
@@ -225,12 +226,12 @@ Dictionary nvim_get_hl_by_name(String name, Boolean rgb, Arena *arena, Error *er
 ///                   the end of the buffer.
 /// @param lines      Array of lines
 /// @param[out] err   Error details, if any
-void buffer_insert(Buffer buffer, Integer lnum, ArrayOf(String) lines, Error *err)
+void buffer_insert(Buffer buffer, Integer lnum, ArrayOf(String) lines, Arena *arena, Error *err)
   FUNC_API_DEPRECATED_SINCE(1)
 {
   // "lnum" will be the index of the line after inserting,
   // no matter if it is negative or not
-  nvim_buf_set_lines(0, buffer, lnum, lnum, true, lines, err);
+  nvim_buf_set_lines(0, buffer, lnum, lnum, true, lines, arena, err);
 }
 
 /// Gets a buffer line
@@ -272,13 +273,13 @@ String buffer_get_line(Buffer buffer, Integer index, Arena *arena, Error *err)
 /// @param index    Line index
 /// @param line     Contents of the new line
 /// @param[out] err Error details, if any
-void buffer_set_line(Buffer buffer, Integer index, String line, Error *err)
+void buffer_set_line(Buffer buffer, Integer index, String line, Arena *arena, Error *err)
   FUNC_API_DEPRECATED_SINCE(1)
 {
   Object l = STRING_OBJ(line);
   Array array = { .items = &l, .size = 1 };
   index = convert_index(index);
-  nvim_buf_set_lines(0, buffer, index, index + 1, true,  array, err);
+  nvim_buf_set_lines(0, buffer, index, index + 1, true,  array, arena, err);
 }
 
 /// Deletes a buffer line
@@ -291,12 +292,12 @@ void buffer_set_line(Buffer buffer, Integer index, String line, Error *err)
 /// @param buffer   buffer handle
 /// @param index    line index
 /// @param[out] err Error details, if any
-void buffer_del_line(Buffer buffer, Integer index, Error *err)
+void buffer_del_line(Buffer buffer, Integer index, Arena *arena, Error *err)
   FUNC_API_DEPRECATED_SINCE(1)
 {
   Array array = ARRAY_DICT_INIT;
   index = convert_index(index);
-  nvim_buf_set_lines(0, buffer, index, index + 1, true, array, err);
+  nvim_buf_set_lines(0, buffer, index, index + 1, true, array, arena, err);
 }
 
 /// Retrieves a line range from the buffer
@@ -342,12 +343,13 @@ ArrayOf(String) buffer_get_line_slice(Buffer buffer,
 //                        array will delete the line range)
 /// @param[out] err       Error details, if any
 void buffer_set_line_slice(Buffer buffer, Integer start, Integer end, Boolean include_start,
-                           Boolean include_end, ArrayOf(String) replacement, Error *err)
+                           Boolean include_end, ArrayOf(String) replacement, Arena *arena,
+                           Error *err)
   FUNC_API_DEPRECATED_SINCE(1)
 {
   start = convert_index(start) + !include_start;
   end = convert_index(end) + include_end;
-  nvim_buf_set_lines(0, buffer, start, end, false, replacement, err);
+  nvim_buf_set_lines(0, buffer, start, end, false, replacement, arena, err);
 }
 
 /// Sets a buffer-scoped (b:) variable
@@ -513,7 +515,7 @@ static int64_t convert_index(int64_t index)
 /// @param          name Option name
 /// @param[out] err Error details, if any
 /// @return         Option Information
-Dictionary nvim_get_option_info(String name, Arena *arena, Error *err)
+Dict nvim_get_option_info(String name, Arena *arena, Error *err)
   FUNC_API_SINCE(7)
   FUNC_API_DEPRECATED_SINCE(11)
 {
@@ -540,7 +542,7 @@ void nvim_set_option(uint64_t channel_id, String name, Object value, Error *err)
 /// @param name     Option name
 /// @param[out] err Error details, if any
 /// @return         Option value (global)
-Object nvim_get_option(String name, Arena *arena, Error *err)
+Object nvim_get_option(String name, Error *err)
   FUNC_API_SINCE(1)
   FUNC_API_DEPRECATED_SINCE(11)
 {
@@ -554,7 +556,7 @@ Object nvim_get_option(String name, Arena *arena, Error *err)
 /// @param name       Option name
 /// @param[out] err   Error details, if any
 /// @return Option value
-Object nvim_buf_get_option(Buffer buffer, String name, Arena *arena, Error *err)
+Object nvim_buf_get_option(Buffer buffer, String name, Error *err)
   FUNC_API_SINCE(1)
   FUNC_API_DEPRECATED_SINCE(11)
 {
@@ -596,7 +598,7 @@ void nvim_buf_set_option(uint64_t channel_id, Buffer buffer, String name, Object
 /// @param name     Option name
 /// @param[out] err Error details, if any
 /// @return Option value
-Object nvim_win_get_option(Window window, String name, Arena *arena, Error *err)
+Object nvim_win_get_option(Window window, String name, Error *err)
   FUNC_API_SINCE(1)
   FUNC_API_DEPRECATED_SINCE(11)
 {
@@ -697,4 +699,110 @@ static void set_option_to(uint64_t channel_id, void *to, OptReqScope req_scope, 
   WITH_SCRIPT_CONTEXT(channel_id, {
     set_option_value_for(name.data, opt_idx, optval, opt_flags, req_scope, to, err);
   });
+}
+
+/// @deprecated Use nvim_exec_lua() instead.
+///
+/// Calls many API methods atomically.
+///
+/// This has two main usages:
+/// 1. To perform several requests from an async context atomically, i.e.
+///    without interleaving redraws, RPC requests from other clients, or user
+///    interactions (however API methods may trigger autocommands or event
+///    processing which have such side effects, e.g. |:sleep| may wake timers).
+/// 2. To minimize RPC overhead (roundtrips) of a sequence of many requests.
+///
+/// @param channel_id
+/// @param calls an array of calls, where each call is described by an array
+///              with two elements: the request name, and an array of arguments.
+/// @param[out] err Validation error details (malformed `calls` parameter),
+///             if any. Errors from batched calls are given in the return value.
+///
+/// @return Array of two elements. The first is an array of return
+/// values. The second is NIL if all calls succeeded. If a call resulted in
+/// an error, it is a three-element array with the zero-based index of the call
+/// which resulted in an error, the error type and the error message. If an
+/// error occurred, the values from all preceding calls will still be returned.
+Array nvim_call_atomic(uint64_t channel_id, Array calls, Arena *arena, Error *err)
+  FUNC_API_SINCE(1) FUNC_API_DEPRECATED_SINCE(12) FUNC_API_REMOTE_ONLY
+{
+  Array rv = arena_array(arena, 2);
+  Array results = arena_array(arena, calls.size);
+  Error nested_error = ERROR_INIT;
+
+  size_t i;  // also used for freeing the variables
+  for (i = 0; i < calls.size; i++) {
+    VALIDATE_T("'calls' item", kObjectTypeArray, calls.items[i].type, {
+      goto theend;
+    });
+    Array call = calls.items[i].data.array;
+    VALIDATE_EXP((call.size == 2), "'calls' item", "2-item Array", NULL, {
+      goto theend;
+    });
+    VALIDATE_T("name", kObjectTypeString, call.items[0].type, {
+      goto theend;
+    });
+    String name = call.items[0].data.string;
+    VALIDATE_T("call args", kObjectTypeArray, call.items[1].type, {
+      goto theend;
+    });
+    Array args = call.items[1].data.array;
+
+    MsgpackRpcRequestHandler handler =
+      msgpack_rpc_get_handler_for(name.data,
+                                  name.size,
+                                  &nested_error);
+
+    if (ERROR_SET(&nested_error)) {
+      break;
+    }
+
+    Object result = handler.fn(channel_id, args, arena, &nested_error);
+    if (ERROR_SET(&nested_error)) {
+      // error handled after loop
+      break;
+    }
+    // TODO(bfredl): wasteful copy. It could be avoided to encoding to msgpack
+    // directly here. But `result` might become invalid when next api function
+    // is called in the loop.
+    ADD_C(results, copy_object(result, arena));
+    if (handler.ret_alloc) {
+      api_free_object(result);
+    }
+  }
+
+  ADD_C(rv, ARRAY_OBJ(results));
+  if (ERROR_SET(&nested_error)) {
+    Array errval = arena_array(arena, 3);
+    ADD_C(errval, INTEGER_OBJ((Integer)i));
+    ADD_C(errval, INTEGER_OBJ(nested_error.type));
+    ADD_C(errval, STRING_OBJ(copy_string(cstr_as_string(nested_error.msg), arena)));
+    ADD_C(rv, ARRAY_OBJ(errval));
+  } else {
+    ADD_C(rv, NIL);
+  }
+
+theend:
+  api_clear_error(&nested_error);
+  return rv;
+}
+
+/// @deprecated
+///
+/// @param channel_id Channel id (passed automatically by the dispatcher)
+/// @param event      Event type string
+void nvim_subscribe(uint64_t channel_id, String event)
+  FUNC_API_SINCE(1) FUNC_API_REMOTE_ONLY
+{
+  // Does nothing. `rpcnotify(0,…)` broadcasts to all channels, there are no "subscriptions".
+}
+
+/// @deprecated
+///
+/// @param channel_id Channel id (passed automatically by the dispatcher)
+/// @param event      Event type string
+void nvim_unsubscribe(uint64_t channel_id, String event)
+  FUNC_API_SINCE(1) FUNC_API_REMOTE_ONLY
+{
+  // Does nothing. `rpcnotify(0,…)` broadcasts to all channels, there are no "subscriptions".
 }

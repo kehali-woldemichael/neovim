@@ -12,8 +12,10 @@
 #include "nvim/arglist.h"
 #include "nvim/arglist_defs.h"
 #include "nvim/ascii_defs.h"
+#include "nvim/autocmd.h"
 #include "nvim/buffer.h"
 #include "nvim/buffer_defs.h"
+#include "nvim/errors.h"
 #include "nvim/eval.h"
 #include "nvim/eval/typval.h"
 #include "nvim/eval/typval_defs.h"
@@ -1092,6 +1094,8 @@ void ex_mkrc(exarg_T *eap)
   }
 
   xfree(viewFile);
+
+  apply_autocmds(EVENT_SESSIONWRITEPOST, NULL, NULL, false, curbuf);
 }
 
 /// @return  the name of the view file for the current buffer.
@@ -1135,7 +1139,7 @@ static char *get_view_file(char c)
   }
   *s++ = '=';
   *s++ = c;
-  xstrlcpy(s, ".vim", 5);
+  xmemcpyz(s, S_LEN(".vim"));
 
   xfree(sname);
   return retval;

@@ -250,11 +250,17 @@ static int get_fpos_of_mouse(pos_T *mpos)
   }
 
   // winpos and height may change in win_enter()!
-  if (winrow >= wp->w_height_inner) {  // In (or below) status line
+  if (winrow >= wp->w_height_inner + wp->w_status_height) {  // Below window
+    if (mouse_grid <= 1 && mouse_row < Rows - p_ch
+        && mouse_row >= Rows - p_ch - global_stl_height()) {  // In global status line
+      return IN_STATUS_LINE;
+    }
+    return IN_UNKNOWN;
+  } else if (winrow >= wp->w_height_inner) {  // In window status line
     return IN_STATUS_LINE;
   }
 
-  if (winrow < 0 && winrow + wp->w_winbar_height >= 0) {
+  if (winrow < 0 && winrow + wp->w_winbar_height >= 0) {  // In winbar
     return MOUSE_WINBAR;
   }
 
@@ -467,7 +473,7 @@ bool do_mouse(oparg_T *oap, int c, int dir, int count, bool fixindent)
       if (regname == '.') {
         insert_reg(regname, true);
       } else {
-        if (regname == 0 && eval_has_provider("clipboard")) {
+        if (regname == 0 && eval_has_provider("clipboard", false)) {
           regname = '*';
         }
         if ((State & REPLACE_FLAG) && !yank_register_mline(regname)) {
@@ -688,6 +694,9 @@ popupexit:
     if (in_statuscol && wp->w_p_rl) {
       click_col = wp->w_width_inner - click_col - 1;
     }
+    if (in_statuscol && click_col >= (int)wp->w_statuscol_click_defs_size) {
+      return false;
+    }
 
     if (click_defs != NULL) {
       switch (click_defs[click_col].type) {
@@ -771,7 +780,7 @@ popupexit:
       // move VIsual to the right column
       start_visual = curwin->w_cursor;              // save the cursor pos
       curwin->w_cursor = end_visual;
-      coladvance(end_visual.col);
+      coladvance(curwin, end_visual.col);
       VIsual = curwin->w_cursor;
       curwin->w_cursor = start_visual;              // restore the cursor
     } else {
@@ -819,7 +828,7 @@ popupexit:
   // Middle mouse click: Put text before cursor.
   if (which_button == MOUSE_MIDDLE) {
     int c2;
-    if (regname == 0 && eval_has_provider("clipboard")) {
+    if (regname == 0 && eval_has_provider("clipboard", false)) {
       regname = '*';
     }
     if (yank_register_mline(regname)) {
@@ -1024,7 +1033,7 @@ void do_mousescroll(cmdarg_T *cap)
     // Vertical scrolling
     if ((State & MODE_NORMAL) && shift_or_ctrl) {
       // whole page up or down
-      onepage(cap->arg ? FORWARD : BACKWARD, 1);
+      pagescroll(cap->arg ? FORWARD : BACKWARD, 1, false);
     } else {
       if (shift_or_ctrl) {
         // whole page up or down
@@ -1041,9 +1050,7 @@ void do_mousescroll(cmdarg_T *cap)
     // Horizontal scrolling
     int step = shift_or_ctrl ? curwin->w_width_inner : (int)p_mousescroll_hor;
     colnr_T leftcol = curwin->w_leftcol + (cap->arg == MSCR_RIGHT ? -step : +step);
-    if (leftcol < 0) {
-      leftcol = 0;
-    }
+    leftcol = MAX(leftcol, 0);
     do_mousescroll_horiz(leftcol);
   }
 }
@@ -1430,7 +1437,7 @@ retnomove:
           break;
         }
         first = false;
-        hasFolding(curwin->w_topline, &curwin->w_topline, NULL);
+        hasFolding(curwin, curwin->w_topline, &curwin->w_topline, NULL);
         if (curwin->w_topfill < win_get_fill(curwin, curwin->w_topline)) {
           curwin->w_topfill++;
         } else {
@@ -1460,7 +1467,7 @@ retnomove:
         if (curwin->w_topfill > 0) {
           curwin->w_topfill--;
         } else {
-          if (hasFolding(curwin->w_topline, NULL, &curwin->w_topline)
+          if (hasFolding(curwin, curwin->w_topline, NULL, &curwin->w_topline)
               && curwin->w_topline == curbuf->b_ml.ml_line_count) {
             break;
           }
@@ -1515,7 +1522,7 @@ retnomove:
 
   curwin->w_curswant = col;
   curwin->w_set_curswant = false;       // May still have been true
-  if (coladvance(col) == FAIL) {        // Mouse click beyond end of line
+  if (coladvance(curwin, col) == FAIL) {        // Mouse click beyond end of line
     if (inclusive != NULL) {
       *inclusive = true;
     }
@@ -1548,7 +1555,7 @@ static bool do_mousescroll_horiz(colnr_T leftcol)
 
   // When the line of the cursor is too short, move the cursor to the
   // longest visible line.
-  if (!virtual_active()
+  if (!virtual_active(curwin)
       && leftcol > scroll_line_len(curwin->w_cursor.lnum)) {
     curwin->w_cursor.lnum = find_longest_lnum();
     curwin->w_cursor.col = 0;
@@ -1610,34 +1617,36 @@ bool mouse_comp_pos(win_T *win, int *rowp, int *colp, linenr_T *lnump)
   while (row > 0) {
     // Don't include filler lines in "count"
     if (win_may_fill(win)) {
-      if (lnum == win->w_topline) {
-        row -= win->w_topfill;
-      } else {
-        row -= win_get_fill(win, lnum);
-      }
+      row -= lnum == win->w_topline ? win->w_topfill
+                                    : win_get_fill(win, lnum);
       count = plines_win_nofill(win, lnum, false);
     } else {
       count = plines_win(win, lnum, false);
     }
 
     if (win->w_skipcol > 0 && lnum == win->w_topline) {
-      // Adjust for 'smoothscroll' clipping the top screen lines.
-      // A similar formula is used in curs_columns().
       int width1 = win->w_width_inner - win_col_off(win);
-      int skip_lines = 0;
-      if (win->w_skipcol > width1) {
-        skip_lines = (win->w_skipcol - width1) / (width1 + win_col_off2(win)) + 1;
-      } else if (win->w_skipcol > 0) {
-        skip_lines = 1;
+
+      if (width1 > 0) {
+        int skip_lines = 0;
+
+        // Adjust for 'smoothscroll' clipping the top screen lines.
+        // A similar formula is used in curs_columns().
+        if (win->w_skipcol > width1) {
+          skip_lines = (win->w_skipcol - width1) / (width1 + win_col_off2(win)) + 1;
+        } else if (win->w_skipcol > 0) {
+          skip_lines = 1;
+        }
+
+        count -= skip_lines;
       }
-      count -= skip_lines;
     }
 
     if (count > row) {
       break;            // Position is in this buffer line.
     }
 
-    hasFoldingWin(win, lnum, NULL, &lnum, true, NULL);
+    hasFolding(win, lnum, NULL, &lnum);
 
     if (lnum == win->w_buffer->b_ml.ml_line_count) {
       retval = true;
@@ -1650,9 +1659,7 @@ bool mouse_comp_pos(win_T *win, int *rowp, int *colp, linenr_T *lnump)
   if (!retval) {
     // Compute the column without wrapping.
     int off = win_col_off(win) - win_col_off2(win);
-    if (col < off) {
-      col = off;
-    }
+    col = MAX(col, off);
     col += row * (win->w_width_inner - off);
 
     // Add skip column for the topline.
@@ -1667,9 +1674,7 @@ bool mouse_comp_pos(win_T *win, int *rowp, int *colp, linenr_T *lnump)
 
   // skip line number and fold column in front of the line
   col -= win_col_off(win);
-  if (col <= 0) {
-    col = 0;
-  }
+  col = MAX(col, 0);
 
   *colp = col;
   *rowp = row;
@@ -1883,33 +1888,7 @@ static void mouse_check_grid(colnr_T *vcolp, int *flagsp)
   const size_t off = gp->line_offset[click_row] + (size_t)click_col;
   colnr_T col_from_screen = gp->vcols[off];
 
-  if (col_from_screen == MAXCOL) {
-    // When clicking after end of line, still need to set correct curswant
-    size_t off_l = gp->line_offset[click_row] + (size_t)start_col;
-    if (gp->vcols[off_l] < MAXCOL) {
-      // Binary search to find last char in line
-      size_t off_r = off;
-      while (off_l < off_r) {
-        size_t off_m = (off_l + off_r + 1) / 2;
-        if (gp->vcols[off_m] < MAXCOL) {
-          off_l = off_m;
-        } else {
-          off_r = off_m - 1;
-        }
-      }
-      colnr_T eol_vcol = gp->vcols[off_r];
-      assert(eol_vcol < MAXCOL);
-      if (eol_vcol < 0) {
-        // Empty line or whole line before w_leftcol,
-        // with columns before buffer text
-        eol_vcol = curwin->w_leftcol - 1;
-      }
-      *vcolp = eol_vcol + (int)(off - off_r);
-    } else {
-      // Empty line or whole line before w_leftcol
-      *vcolp = click_col - start_col + curwin->w_leftcol;
-    }
-  } else if (col_from_screen >= 0) {
+  if (col_from_screen >= 0) {
     // Use the virtual column from vcols[], it is accurate also after
     // concealed characters.
     *vcolp = col_from_screen;

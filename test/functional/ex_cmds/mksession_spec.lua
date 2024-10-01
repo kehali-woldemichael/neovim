@@ -1,26 +1,23 @@
-local helpers = require('test.functional.helpers')(after_each)
+local t = require('test.testutil')
+local n = require('test.functional.testnvim')()
 local Screen = require('test.functional.ui.screen')
 
-local clear = helpers.clear
-local command = helpers.command
-local get_pathsep = helpers.get_pathsep
-local eq = helpers.eq
-local neq = helpers.neq
-local fn = helpers.fn
-local matches = helpers.matches
+local clear = n.clear
+local command = n.command
+local get_pathsep = n.get_pathsep
+local eq = t.eq
+local neq = t.neq
+local fn = n.fn
+local matches = t.matches
 local pesc = vim.pesc
-local rmdir = helpers.rmdir
+local rmdir = n.rmdir
 local sleep = vim.uv.sleep
-local api = helpers.api
-local skip = helpers.skip
-local is_os = helpers.is_os
-local mkdir = helpers.mkdir
+local api = n.api
+local skip = t.skip
+local is_os = t.is_os
+local mkdir = t.mkdir
 
 local file_prefix = 'Xtest-functional-ex_cmds-mksession_spec'
-
-if helpers.skip(helpers.is_os('win')) then
-  return
-end
 
 describe(':mksession', function()
   local session_file = file_prefix .. '.vim'
@@ -73,25 +70,22 @@ describe(':mksession', function()
     eq(expected_buf_count, #api.nvim_list_bufs())
   end
 
-  it(
-    'do not restore :terminal if not set in sessionoptions, terminal in current window #13078',
-    function()
-      local tmpfile_base = file_prefix .. '-tmpfile'
-      command('edit ' .. tmpfile_base)
-      command('terminal')
+  it('do not restore :terminal if not set in sessionoptions, terminal in curwin #13078', function()
+    local tmpfile_base = file_prefix .. '-tmpfile'
+    command('edit ' .. tmpfile_base)
+    command('terminal')
 
-      local buf_count = #api.nvim_list_bufs()
-      eq(2, buf_count)
+    local buf_count = #api.nvim_list_bufs()
+    eq(2, buf_count)
 
-      eq('terminal', api.nvim_get_option_value('buftype', {}))
+    eq('terminal', api.nvim_get_option_value('buftype', {}))
 
-      test_terminal_session_disabled(2)
+    test_terminal_session_disabled(2)
 
-      -- no terminal should be set. As a side effect we end up with a blank buffer
-      eq('', api.nvim_get_option_value('buftype', { buf = api.nvim_list_bufs()[1] }))
-      eq('', api.nvim_get_option_value('buftype', { buf = api.nvim_list_bufs()[2] }))
-    end
-  )
+    -- no terminal should be set. As a side effect we end up with a blank buffer
+    eq('', api.nvim_get_option_value('buftype', { buf = api.nvim_list_bufs()[1] }))
+    eq('', api.nvim_get_option_value('buftype', { buf = api.nvim_list_bufs()[2] }))
+  end)
 
   it('do not restore :terminal if not set in sessionoptions, terminal hidden #13078', function()
     command('terminal')
@@ -173,8 +167,10 @@ describe(':mksession', function()
   end)
 
   it('restores CWD for :terminal buffers #11288', function()
+    skip(is_os('win'), 'causes rmdir() to fail')
+
     local cwd_dir = fn.fnamemodify('.', ':p:~'):gsub([[[\/]*$]], '')
-    cwd_dir = cwd_dir:gsub([[\]], '/') -- :mksession always uses unix slashes.
+    cwd_dir = t.fix_slashes(cwd_dir) -- :mksession always uses unix slashes.
     local session_path = cwd_dir .. '/' .. session_file
 
     command('cd ' .. tab_dir)

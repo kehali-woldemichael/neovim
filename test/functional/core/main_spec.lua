@@ -1,17 +1,18 @@
-local uv = vim.uv
-local helpers = require('test.functional.helpers')(after_each)
+local t = require('test.testutil')
+local n = require('test.functional.testnvim')()
 local Screen = require('test.functional.ui.screen')
+local uv = vim.uv
 
-local eq = helpers.eq
-local matches = helpers.matches
-local feed = helpers.feed
-local eval = helpers.eval
-local clear = helpers.clear
-local fn = helpers.fn
-local nvim_prog_abs = helpers.nvim_prog_abs
-local write_file = helpers.write_file
-local is_os = helpers.is_os
-local skip = helpers.skip
+local eq = t.eq
+local matches = t.matches
+local feed = n.feed
+local eval = n.eval
+local clear = n.clear
+local fn = n.fn
+local nvim_prog_abs = n.nvim_prog_abs
+local write_file = t.write_file
+local is_os = t.is_os
+local skip = t.skip
 
 describe('command-line option', function()
   describe('-s', function()
@@ -73,6 +74,18 @@ describe('command-line option', function()
       eq(#'100500\n', attrs.size)
     end)
 
+    it('does not crash when run completion in ex mode', function()
+      fn.system({
+        nvim_prog_abs(),
+        '--clean',
+        '-e',
+        '-s',
+        '--cmd',
+        'exe "norm! i\\<C-X>\\<C-V>"',
+      })
+      eq(0, eval('v:shell_error'))
+    end)
+
     it('does not crash after reading from stdin in non-headless mode', function()
       skip(is_os('win'))
       local screen = Screen.new(40, 8)
@@ -108,9 +121,9 @@ describe('command-line option', function()
       feed('i:cq<CR>')
       screen:expect([[
                                                 |
-        [Process exited 1]                      |
+        [Process exited 1]{2: }                     |
                                                 |*5
-        -- TERMINAL --                          |
+        {5:-- TERMINAL --}                          |
       ]])
       --[=[ Example of incorrect output:
       screen:expect([[
@@ -180,4 +193,26 @@ describe('command-line option', function()
     matches('Run "nvim %-V1 %-v"', fn.system({ nvim_prog_abs(), '-v' }))
     matches('Compilation: .*Run :checkhealth', fn.system({ nvim_prog_abs(), '-V1', '-v' }))
   end)
+
+  if is_os('win') then
+    for _, prefix in ipairs({ '~/', '~\\' }) do
+      it('expands ' .. prefix .. ' on Windows', function()
+        local fname = os.getenv('USERPROFILE') .. '\\nvim_test.txt'
+        finally(function()
+          os.remove(fname)
+        end)
+        write_file(fname, 'some text')
+        eq(
+          'some text',
+          fn.system({
+            nvim_prog_abs(),
+            '-es',
+            '+%print',
+            '+q',
+            prefix .. 'nvim_test.txt',
+          }):gsub('\n', '')
+        )
+      end)
+    end
+  end
 end)

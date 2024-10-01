@@ -15,12 +15,14 @@
 #include "nvim/api/extmark.h"
 #include "nvim/api/private/defs.h"
 #include "nvim/api/private/helpers.h"
+#include "nvim/api/ui.h"
 #include "nvim/ascii_defs.h"
 #include "nvim/buffer_defs.h"
 #include "nvim/change.h"
 #include "nvim/cmdexpand_defs.h"
 #include "nvim/cursor.h"
 #include "nvim/drawscreen.h"
+#include "nvim/errors.h"
 #include "nvim/eval.h"
 #include "nvim/eval/funcs.h"
 #include "nvim/eval/typval.h"
@@ -102,7 +104,7 @@ typedef struct {
     if (args[i].v_type == VAR_UNKNOWN) { \
       lua_pushnil(lstate); \
     } else { \
-      nlua_push_typval(lstate, &args[i], special); \
+      nlua_push_typval(lstate, &args[i], (special) ? kNluaPushSpecial : 0); \
     } \
   }
 
@@ -324,7 +326,7 @@ static int nlua_thr_api_nvim__get_runtime(lua_State *lstate)
   }
 
   ArrayOf(String) ret = runtime_get_named_thread(is_lua, pat, all);
-  nlua_push_Array(lstate, ret, true);
+  nlua_push_Array(lstate, ret, kNluaPushSpecial);
   api_free_array(ret);
   api_free_array(pat);
 
@@ -922,6 +924,7 @@ void nlua_free_all_mem(void)
   lua_State *lstate = global_lstate;
   nlua_unref_global(lstate, require_ref);
   nlua_common_free_all_mem(lstate);
+  tslua_free();
 }
 
 static void nlua_common_free_all_mem(lua_State *lstate)
@@ -1209,7 +1212,7 @@ int nlua_call(lua_State *lstate)
   });
 
   if (!ERROR_SET(&err)) {
-    nlua_push_typval(lstate, &rettv, false);
+    nlua_push_typval(lstate, &rettv, 0);
   }
   tv_clear(&rettv);
 
@@ -1260,7 +1263,7 @@ static int nlua_rpc(lua_State *lstate, bool request)
     ArenaMem res_mem = NULL;
     Object result = rpc_send_call(chan_id, name, args, &res_mem, &err);
     if (!ERROR_SET(&err)) {
-      nlua_push_Object(lstate, &result, false);
+      nlua_push_Object(lstate, &result, 0);
       arena_mem_free(res_mem);
     }
   } else {
@@ -1486,7 +1489,7 @@ static void nlua_typval_exec(const char *lcmd, size_t lcmd_len, const char *name
   }
 }
 
-int nlua_source_using_linegetter(LineGetter fgetline, void *cookie, char *name)
+void nlua_source_str(const char *code, char *name)
 {
   const sctx_T save_current_sctx = current_sctx;
   current_sctx.sc_sid = SID_STR;
@@ -1494,22 +1497,11 @@ int nlua_source_using_linegetter(LineGetter fgetline, void *cookie, char *name)
   current_sctx.sc_lnum = 0;
   estack_push(ETYPE_SCRIPT, name, 0);
 
-  garray_T ga;
-  char *line = NULL;
-
-  ga_init(&ga, (int)sizeof(char *), 10);
-  while ((line = fgetline(0, cookie, 0, false)) != NULL) {
-    GA_APPEND(char *, &ga, line);
-  }
-  char *code = ga_concat_strings_sep(&ga, "\n");
   size_t len = strlen(code);
   nlua_typval_exec(code, len, name, NULL, 0, false, NULL);
 
   estack_pop();
   current_sctx = save_current_sctx;
-  ga_clear_strings(&ga);
-  xfree(code);
-  return OK;
 }
 
 /// Call a LuaCallable given some typvals
@@ -1563,7 +1555,7 @@ Object nlua_exec(const String str, const Array args, LuaRetMode mode, Arena *are
   }
 
   for (size_t i = 0; i < args.size; i++) {
-    nlua_push_Object(lstate, &args.items[i], false);
+    nlua_push_Object(lstate, &args.items[i], 0);
   }
 
   if (nlua_pcall(lstate, (int)args.size, 1)) {
@@ -1610,7 +1602,7 @@ Object nlua_call_ref(LuaRef ref, const char *name, Array args, LuaRetMode mode, 
     nargs++;
   }
   for (size_t i = 0; i < args.size; i++) {
-    nlua_push_Object(lstate, &args.items[i], false);
+    nlua_push_Object(lstate, &args.items[i], 0);
   }
 
   if (nlua_pcall(lstate, nargs, 1)) {
@@ -1766,7 +1758,7 @@ void ex_luado(exarg_T *const eap)
     lua_pushvalue(lstate, -1);
     const char *const old_line = ml_get_buf(curbuf, l);
     // Get length of old_line here as calling Lua code may free it.
-    const size_t old_line_len = strlen(old_line);
+    const colnr_T old_line_len = ml_get_buf_len(curbuf, l);
     lua_pushstring(lstate, old_line);
     lua_pushnumber(lstate, (lua_Number)l);
     if (nlua_pcall(lstate, 2, 1)) {
@@ -1790,13 +1782,13 @@ void ex_luado(exarg_T *const eap)
         }
       }
       ml_replace(l, new_line_transformed, false);
-      inserted_bytes(l, 0, (int)old_line_len, (int)new_line_len);
+      inserted_bytes(l, 0, old_line_len, (int)new_line_len);
     }
     lua_pop(lstate, 1);
   }
 
   lua_pop(lstate, 1);
-  check_cursor();
+  check_cursor(curwin);
   redraw_curbuf_later(UPD_NOT_VALID);
 }
 
@@ -1828,7 +1820,11 @@ bool nlua_exec_file(const char *path)
     lua_getglobal(lstate, "loadfile");
     lua_pushstring(lstate, path);
   } else {
-    FileDescriptor *stdin_dup = file_open_stdin();
+    FileDescriptor stdin_dup;
+    int error = file_open_stdin(&stdin_dup);
+    if (error) {
+      return false;
+    }
 
     StringBuilder sb = KV_INITIAL_VALUE;
     kv_resize(sb, 64);
@@ -1837,7 +1833,7 @@ bool nlua_exec_file(const char *path)
       if (got_int) {  // User canceled.
         return false;
       }
-      ptrdiff_t read_size = file_read(stdin_dup, IObuff, 64);
+      ptrdiff_t read_size = file_read(&stdin_dup, IObuff, 64);
       if (read_size < 0) {  // Error.
         return false;
       }
@@ -1849,7 +1845,7 @@ bool nlua_exec_file(const char *path)
       }
     }
     kv_push(sb, NUL);
-    file_free(stdin_dup, false);
+    file_close(&stdin_dup, false);
 
     lua_getglobal(lstate, "loadstring");
     lua_pushstring(lstate, sb.items);
@@ -1904,8 +1900,16 @@ static void nlua_add_treesitter(lua_State *const lstate) FUNC_ATTR_NONNULL_ALL
   lua_pushcfunction(lstate, tslua_push_parser);
   lua_setfield(lstate, -2, "_create_ts_parser");
 
-  lua_pushcfunction(lstate, tslua_add_language);
-  lua_setfield(lstate, -2, "_ts_add_language");
+  lua_pushcfunction(lstate, tslua_push_querycursor);
+  lua_setfield(lstate, -2, "_create_ts_querycursor");
+
+  lua_pushcfunction(lstate, tslua_add_language_from_object);
+  lua_setfield(lstate, -2, "_ts_add_language_from_object");
+
+#ifdef HAVE_WASMTIME
+  lua_pushcfunction(lstate, tslua_add_language_from_wasm);
+  lua_setfield(lstate, -2, "_ts_add_language_from_wasm");
+#endif
 
   lua_pushcfunction(lstate, tslua_has_language);
   lua_setfield(lstate, -2, "_ts_has_language");
@@ -1926,10 +1930,14 @@ static void nlua_add_treesitter(lua_State *const lstate) FUNC_ATTR_NONNULL_ALL
   lua_setfield(lstate, -2, "_ts_get_minimum_language_version");
 }
 
-int nlua_expand_pat(expand_T *xp, char *pat, int *num_results, char ***results)
+static garray_T expand_result_array = GA_EMPTY_INIT_VALUE;
+
+/// Finds matches for Lua cmdline completion and advances xp->xp_pattern after prefix.
+/// This should be called before xp->xp_pattern is first used.
+void nlua_expand_pat(expand_T *xp)
 {
   lua_State *const lstate = global_lstate;
-  int ret = OK;
+  int status = FAIL;
 
   // [ vim ]
   lua_getglobal(lstate, "vim");
@@ -1938,60 +1946,59 @@ int nlua_expand_pat(expand_T *xp, char *pat, int *num_results, char ***results)
   lua_getfield(lstate, -1, "_expand_pat");
   luaL_checktype(lstate, -1, LUA_TFUNCTION);
 
-  // [ vim, vim._expand_pat, buf ]
-  lua_pushlstring(lstate, pat, strlen(pat));
+  // [ vim, vim._expand_pat, pat ]
+  const char *pat = xp->xp_pattern;
+  assert(xp->xp_line + xp->xp_col >= pat);
+  ptrdiff_t patlen = xp->xp_line + xp->xp_col - pat;
+  lua_pushlstring(lstate, pat, (size_t)patlen);
 
   if (nlua_pcall(lstate, 1, 2) != 0) {
-    nlua_error(lstate,
-               _("Error executing vim._expand_pat: %.*s"));
-    return FAIL;
+    nlua_error(lstate, _("Error executing vim._expand_pat: %.*s"));
+    return;
   }
 
   Error err = ERROR_INIT;
 
-  *num_results = 0;
-  *results = NULL;
-
   Arena arena = ARENA_EMPTY;
-  int prefix_len = (int)nlua_pop_Integer(lstate, &arena, &err);
-  if (ERROR_SET(&err)) {
-    ret = FAIL;
+  ptrdiff_t prefix_len = nlua_pop_Integer(lstate, &arena, &err);
+  if (ERROR_SET(&err) || prefix_len > patlen) {
     goto cleanup;
   }
 
   Array completions = nlua_pop_Array(lstate, &arena, &err);
   if (ERROR_SET(&err)) {
-    ret = FAIL;
     goto cleanup_array;
   }
 
-  garray_T result_array;
-  ga_init(&result_array, (int)sizeof(char *), 80);
+  ga_clear(&expand_result_array);
+  ga_init(&expand_result_array, (int)sizeof(char *), 80);
+
   for (size_t i = 0; i < completions.size; i++) {
     Object v = completions.items[i];
-
     if (v.type != kObjectTypeString) {
-      ret = FAIL;
       goto cleanup_array;
     }
-
-    GA_APPEND(char *, &result_array, string_to_cstr(v.data.string));
+    GA_APPEND(char *, &expand_result_array, string_to_cstr(v.data.string));
   }
 
   xp->xp_pattern += prefix_len;
-  *results = result_array.ga_data;
-  *num_results = result_array.ga_len;
+  status = OK;
 
 cleanup_array:
   arena_mem_free(arena_finish(&arena));
 
 cleanup:
-
-  if (ret == FAIL) {
-    ga_clear(&result_array);
+  if (status == FAIL) {
+    ga_clear(&expand_result_array);
   }
+}
 
-  return ret;
+int nlua_expand_get_matches(int *num_results, char ***results)
+{
+  *results = expand_result_array.ga_data;
+  *num_results = expand_result_array.ga_len;
+  expand_result_array = (garray_T)GA_EMPTY_INIT_VALUE;
+  return *num_results > 0;
 }
 
 static int nlua_is_thread(lua_State *lstate)
@@ -2056,10 +2063,11 @@ char *nlua_register_table_as_callable(const typval_T *const arg)
   return name;
 }
 
-void nlua_execute_on_key(int c)
+void nlua_execute_on_key(int c, char *typed_buf)
 {
-  char buf[NUMBUFLEN];
+  char buf[MB_MAXBYTES * 3 + 4];
   size_t buf_len = special_to_buf(c, mod_mask, false, buf);
+  vim_unescape_ks(typed_buf);
 
   lua_State *const lstate = global_lstate;
 
@@ -2077,9 +2085,12 @@ void nlua_execute_on_key(int c)
   // [ vim, vim._on_key, buf ]
   lua_pushlstring(lstate, buf, buf_len);
 
+  // [ vim, vim._on_key, buf, typed_buf ]
+  lua_pushstring(lstate, typed_buf);
+
   int save_got_int = got_int;
   got_int = false;  // avoid interrupts when the key typed is Ctrl-C
-  if (nlua_pcall(lstate, 1, 0)) {
+  if (nlua_pcall(lstate, 2, 0)) {
     nlua_error(lstate,
                _("Error executing  vim.on_key Lua callback: %.*s"));
   }

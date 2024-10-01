@@ -48,14 +48,12 @@ typedef struct {
   int attr_id;  ///< cached lookup of inl.hl_id if it was a highlight
   bool owned;   ///< ephemeral decoration, free memory immediately
   DecorPriority priority;
-  DecorPriority subpriority;  ///< Secondary priority value used for ordering (#27131).
-                              ///< Reflects the order of patterns/captures in the query file.
   DecorRangeKind kind;
   /// Screen column to draw the virtual text.
-  /// When -1, the virtual text may be drawn after deciding where.
-  /// When -3, the virtual text should be drawn on the next screen line.
-  /// When -10, the virtual text has just been added.
-  /// When INT_MIN, the virtual text should no longer be drawn.
+  /// When -1, it should be drawn on the current screen line after deciding where.
+  /// When -3, it may be drawn at a position yet to be assigned.
+  /// When -10, it has just been added.
+  /// When INT_MIN, it should no longer be drawn.
   int draw_col;
 } DecorRange;
 
@@ -79,6 +77,9 @@ typedef struct {
 } DecorState;
 
 EXTERN DecorState decor_state INIT( = { 0 });
+// TODO(bfredl): These should maybe be per-buffer, so that all resources
+// associated with a buffer can be freed when the buffer is unloaded.
+EXTERN kvec_t(DecorSignHighlight) decor_items INIT( = KV_INITIAL_VALUE);
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "decoration.h.generated.h"

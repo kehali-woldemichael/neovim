@@ -793,6 +793,8 @@ Cursor and mark position:		*cursor-functions* *mark-functions*
 
 Working with text in the current buffer:		*text-functions*
 	getline()		get a line or list of lines from the buffer
+	getregion()		get a region of text from the buffer
+	getregionpos()		get a list of positions for a region
 	setline()		replace a line in the buffer
 	append()		append line or list of lines in the buffer
 	indent()		indent of a specific line
@@ -834,6 +836,7 @@ System functions and manipulation of files:
 	getfperm()		get the permissions of a file
 	setfperm()		set the permissions of a file
 	getftype()		get the kind of a file
+	isabsolutepath()	check if a path is absolute
 	isdirectory()		check if a directory exists
 	getfsize()		get the size of a file
 	getcwd()		get the current working directory
@@ -853,6 +856,7 @@ System functions and manipulation of files:
 	readblob()		read a file into a Blob
 	readdir()		get a List of file names in a directory
 	writefile()		write a List of lines or Blob into a file
+	filecopy()		copy a file {from} to {to}
 
 Date and Time:				*date-functions* *time-functions*
 	getftime()		get last modification time of a file
@@ -904,7 +908,8 @@ Buffers, windows and the argument list:
 Command line:					*command-line-functions*
 	getcmdcompltype()	get the type of the current command line
 				completion
-	getcmdline()		get the current command line
+	getcmdline()		get the current command line input
+	getcmdprompt()		get the current command line prompt
 	getcmdpos()		get position of the cursor in the command line
 	getcmdscreenpos()	get screen position of the cursor in the
 				command line
@@ -947,7 +952,7 @@ Syntax and highlighting:	  *syntax-functions* *highlighting-functions*
 	synIDattr()		get a specific attribute of a syntax ID
 	synIDtrans()		get translated syntax ID
 	synstack()		get list of syntax IDs at a specific position
-	synconcealed()		get info about concealing
+	synconcealed()		get info about (syntax) concealing
 	diff_hlID()		get highlight ID for diff mode at a position
 	matchadd()		define a pattern to highlight (a "match")
 	matchaddpos()		define a list of positions to highlight
@@ -2499,13 +2504,9 @@ When you write a compiler file and put it in your personal runtime directory
 variable to make the default file skip the settings.
 							*:CompilerSet*
 The second mechanism is to use ":set" for ":compiler!" and ":setlocal" for
-":compiler".  Vim defines the ":CompilerSet" user command for this.  However,
-older Vim versions don't, thus your plugin should define it then.  This is an
-example: >
+":compiler".  Vim defines the ":CompilerSet" user command for this.  This is
+an example: >
 
-  if exists(":CompilerSet") != 2
-    command -nargs=* CompilerSet setlocal <args>
-  endif
   CompilerSet errorformat&		" use the default 'errorformat'
   CompilerSet makeprg=nmake
 

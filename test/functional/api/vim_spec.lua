@@ -1,42 +1,43 @@
-local helpers = require('test.functional.helpers')(after_each)
+local t = require('test.testutil')
+local n = require('test.functional.testnvim')()
 local Screen = require('test.functional.ui.screen')
 local uv = vim.uv
 
 local fmt = string.format
-local dedent = helpers.dedent
-local assert_alive = helpers.assert_alive
+local dedent = t.dedent
+local assert_alive = n.assert_alive
 local NIL = vim.NIL
-local clear, eq, neq = helpers.clear, helpers.eq, helpers.neq
-local command = helpers.command
-local command_output = helpers.api.nvim_command_output
-local exec = helpers.exec
-local exec_capture = helpers.exec_capture
-local eval = helpers.eval
-local expect = helpers.expect
-local fn = helpers.fn
-local api = helpers.api
-local matches = helpers.matches
+local clear, eq, neq = n.clear, t.eq, t.neq
+local command = n.command
+local command_output = n.api.nvim_command_output
+local exec = n.exec
+local exec_capture = n.exec_capture
+local eval = n.eval
+local expect = n.expect
+local fn = n.fn
+local api = n.api
+local matches = t.matches
 local pesc = vim.pesc
-local mkdir_p = helpers.mkdir_p
-local ok, nvim_async, feed = helpers.ok, helpers.nvim_async, helpers.feed
-local async_meths = helpers.async_meths
-local is_os = helpers.is_os
-local parse_context = helpers.parse_context
-local request = helpers.request
-local rmdir = helpers.rmdir
-local source = helpers.source
-local next_msg = helpers.next_msg
-local tmpname = helpers.tmpname
-local write_file = helpers.write_file
-local exec_lua = helpers.exec_lua
-local exc_exec = helpers.exc_exec
-local insert = helpers.insert
-local skip = helpers.skip
+local mkdir_p = n.mkdir_p
+local ok, nvim_async, feed = t.ok, n.nvim_async, n.feed
+local async_meths = n.async_meths
+local is_os = t.is_os
+local parse_context = n.parse_context
+local request = n.request
+local rmdir = n.rmdir
+local source = n.source
+local next_msg = n.next_msg
+local tmpname = t.tmpname
+local write_file = t.write_file
+local exec_lua = n.exec_lua
+local exc_exec = n.exc_exec
+local insert = n.insert
+local skip = t.skip
 
-local pcall_err = helpers.pcall_err
+local pcall_err = t.pcall_err
 local format_string = require('test.format_string').format_string
-local intchar2lua = helpers.intchar2lua
-local mergedicts_copy = helpers.mergedicts_copy
+local intchar2lua = t.intchar2lua
+local mergedicts_copy = t.mergedicts_copy
 local endswith = vim.endswith
 
 describe('API', function()
@@ -366,14 +367,11 @@ describe('API', function()
     it('displays messages when opts.output=false', function()
       local screen = Screen.new(40, 8)
       screen:attach()
-      screen:set_default_attr_ids({
-        [0] = { bold = true, foreground = Screen.colors.Blue },
-      })
       api.nvim_exec2("echo 'hello'", { output = false })
       screen:expect {
         grid = [[
         ^                                        |
-        {0:~                                       }|*6
+        {1:~                                       }|*6
         hello                                   |
       ]],
       }
@@ -382,14 +380,11 @@ describe('API', function()
     it("doesn't display messages when output=true", function()
       local screen = Screen.new(40, 6)
       screen:attach()
-      screen:set_default_attr_ids({
-        [0] = { bold = true, foreground = Screen.colors.Blue },
-      })
       api.nvim_exec2("echo 'hello'", { output = true })
       screen:expect {
         grid = [[
         ^                                        |
-        {0:~                                       }|*4
+        {1:~                                       }|*4
                                                 |
       ]],
       }
@@ -402,7 +397,7 @@ describe('API', function()
       screen:expect {
         grid = [[
         ^                                        |
-        {0:~                                       }|*4
+        {1:~                                       }|*4
         15                                      |
       ]],
       }
@@ -559,6 +554,16 @@ describe('API', function()
       eq('Vim:E121: Undefined variable: bogus', pcall_err(request, 'nvim_eval', 'bogus expression'))
       eq('', eval('v:errmsg')) -- v:errmsg was not updated.
     end)
+
+    it('can return Lua function to Lua code', function()
+      eq(
+        [["a string with \"double quotes\" and 'single quotes'"]],
+        exec_lua([=[
+          local fun = vim.api.nvim_eval([[luaeval('string.format')]])
+          return fun('%q', [[a string with "double quotes" and 'single quotes']])
+        ]=])
+      )
+    end)
   end)
 
   describe('nvim_call_function', function()
@@ -624,6 +629,16 @@ describe('API', function()
         pcall_err(request, 'nvim_call_function', 'Foo', too_many_args)
       )
     end)
+
+    it('can return Lua function to Lua code', function()
+      eq(
+        [["a string with \"double quotes\" and 'single quotes'"]],
+        exec_lua([=[
+          local fun = vim.api.nvim_call_function('luaeval', { 'string.format' })
+          return fun('%q', [[a string with "double quotes" and 'single quotes']])
+        ]=])
+      )
+    end)
   end)
 
   describe('nvim_call_dict_function', function()
@@ -678,7 +693,7 @@ describe('API', function()
         pcall_err(request, 'nvim_call_dict_function', "{ 'f': '' }", 'f', { 1, 2 })
       )
       eq(
-        'dict argument type must be String or Dictionary',
+        'dict argument type must be String or Dict',
         pcall_err(request, 'nvim_call_dict_function', 42, 'f', { 1, 2 })
       )
       eq(
@@ -702,18 +717,18 @@ describe('API', function()
     end)
 
     after_each(function()
-      helpers.rmdir('Xtestdir')
+      n.rmdir('Xtestdir')
     end)
 
     it('works', function()
       api.nvim_set_current_dir('Xtestdir')
-      eq(fn.getcwd(), start_dir .. helpers.get_pathsep() .. 'Xtestdir')
+      eq(start_dir .. n.get_pathsep() .. 'Xtestdir', fn.getcwd())
     end)
 
     it('sets previous directory', function()
       api.nvim_set_current_dir('Xtestdir')
       command('cd -')
-      eq(fn.getcwd(), start_dir)
+      eq(start_dir, fn.getcwd())
     end)
   end)
 
@@ -1269,7 +1284,7 @@ describe('API', function()
       api.nvim_paste('', true, 3)
       screen:expect([[
                             |
-        ~                   |*2
+        {1:~                   }|*2
         :Foo^                |
       ]])
     end)
@@ -1280,18 +1295,142 @@ describe('API', function()
       api.nvim_paste('normal! \023\022\006\027', true, -1)
       screen:expect([[
                             |
-        ~                   |*2
-        :normal! ^W^V^F^[^   |
+        {1:~                   }|*2
+        :normal! {18:^W^V^F^[}^   |
       ]])
     end)
     it('crlf=false does not break lines at CR, CRLF', function()
       api.nvim_paste('line 1\r\n\r\rline 2\nline 3\rline 4\r', false, -1)
-      expect('line 1\r\n\r\rline 2\nline 3\rline 4\r')
+      local expected = 'line 1\r\n\r\rline 2\nline 3\rline 4\r'
+      expect(expected)
       eq({ 0, 3, 14, 0 }, fn.getpos('.'))
+      feed('u') -- Undo.
+      expect('')
+      feed('.') -- Dot-repeat.
+      expect(expected)
     end)
-    it('vim.paste() failure', function()
-      api.nvim_exec_lua('vim.paste = (function(lines, phase) error("fake fail") end)', {})
-      eq('fake fail', pcall_err(request, 'nvim_paste', 'line 1\nline 2\nline 3', false, 1))
+    describe('repeating a paste via redo/recording', function()
+      -- Test with indent and control chars and multibyte chars containing 0x80 bytes
+      local text = dedent(([[
+      foo
+        bar
+          baz
+      !!!%s!!!%s!!!%s!!!
+      最…倒…倀…
+      ]]):format('\0', '\2\3\6\21\22\23\24\27', '\127'))
+      before_each(function()
+        api.nvim_set_option_value('autoindent', true, {})
+      end)
+      local function test_paste_repeat_normal_insert(is_insert)
+        feed('qr' .. (is_insert and 'i' or ''))
+        eq('r', fn.reg_recording())
+        api.nvim_paste(text, true, -1)
+        feed(is_insert and '<Esc>' or '')
+        expect(text)
+        feed('.')
+        expect(text:rep(2))
+        feed('q')
+        eq('', fn.reg_recording())
+        feed('3.')
+        expect(text:rep(5))
+        feed('2@r')
+        expect(text:rep(9))
+      end
+      it('works in Normal mode', function()
+        test_paste_repeat_normal_insert(false)
+      end)
+      it('works in Insert mode', function()
+        test_paste_repeat_normal_insert(true)
+      end)
+      local function test_paste_repeat_visual_select(is_select)
+        insert(('xxx\n'):rep(5))
+        feed('ggqr' .. (is_select and 'gH' or 'V'))
+        api.nvim_paste(text, true, -1)
+        feed('q')
+        expect(text .. ('xxx\n'):rep(4))
+        feed('2@r')
+        expect(text:rep(3) .. ('xxx\n'):rep(2))
+      end
+      it('works in Visual mode (recording only)', function()
+        test_paste_repeat_visual_select(false)
+      end)
+      it('works in Select mode (recording only)', function()
+        test_paste_repeat_visual_select(true)
+      end)
+    end)
+    it('in a mapping recorded in a macro', function()
+      command([[nnoremap <F2> <Cmd>call nvim_paste('foo', v:false, -1)<CR>]])
+      feed('qr<F2>$q')
+      expect('foo')
+      feed('@r') -- repeating a macro containing the mapping should only paste once
+      expect('foofoo')
+    end)
+    local function test_paste_cancel_error(is_error)
+      before_each(function()
+        exec_lua(([[
+          vim.paste = (function(overridden)
+            return function(lines, phase)
+              for i, line in ipairs(lines) do
+                if line == 'CANCEL' then
+                  %s
+                end
+              end
+              return overridden(lines, phase)
+            end
+          end)(vim.paste)
+        ]]):format(is_error and 'error("fake fail")' or 'return false'))
+      end)
+      local function check_paste_cancel_error(data, crlf, phase)
+        if is_error then
+          eq('fake fail', pcall_err(api.nvim_paste, data, crlf, phase))
+        else
+          eq(false, api.nvim_paste(data, crlf, phase))
+        end
+      end
+      it('in phase -1', function()
+        feed('A')
+        check_paste_cancel_error('CANCEL', true, -1)
+        feed('<Esc>')
+        expect('')
+        feed('.')
+        expect('')
+      end)
+      it('in phase 1', function()
+        feed('A')
+        check_paste_cancel_error('CANCEL', true, 1)
+        feed('<Esc>')
+        expect('')
+        feed('.')
+        expect('')
+      end)
+      it('in phase 2', function()
+        feed('A')
+        eq(true, api.nvim_paste('aaa', true, 1))
+        expect('aaa')
+        check_paste_cancel_error('CANCEL', true, 2)
+        feed('<Esc>')
+        expect('aaa')
+        feed('.')
+        expect('aaaaaa')
+      end)
+      it('in phase 3', function()
+        feed('A')
+        eq(true, api.nvim_paste('aaa', true, 1))
+        expect('aaa')
+        eq(true, api.nvim_paste('bbb', true, 2))
+        expect('aaabbb')
+        check_paste_cancel_error('CANCEL', true, 3)
+        feed('<Esc>')
+        expect('aaabbb')
+        feed('.')
+        expect('aaabbbaaabbb')
+      end)
+    end
+    describe('vim.paste() cancel', function()
+      test_paste_cancel_error(false)
+    end)
+    describe('vim.paste() error', function()
+      test_paste_cancel_error(true)
     end)
   end)
 
@@ -1420,6 +1559,28 @@ describe('API', function()
     it('cannot handle NULs', function()
       eq(0, api.nvim_strwidth('\0abc'))
     end)
+
+    it('can handle emoji with variant selectors and ZWJ', function()
+      local selector = '❤️'
+      eq(2, fn.strchars(selector))
+      eq(1, fn.strcharlen(selector))
+      eq(2, api.nvim_strwidth(selector))
+
+      local no_selector = '❤'
+      eq(1, fn.strchars(no_selector))
+      eq(1, fn.strcharlen(no_selector))
+      eq(1, api.nvim_strwidth(no_selector))
+
+      local selector_zwj_selector = '🏳️‍⚧️'
+      eq(5, fn.strchars(selector_zwj_selector))
+      eq(1, fn.strcharlen(selector_zwj_selector))
+      eq(2, api.nvim_strwidth(selector_zwj_selector))
+
+      local emoji_zwj_emoji = '🧑‍🌾'
+      eq(3, fn.strchars(emoji_zwj_emoji))
+      eq(1, fn.strcharlen(emoji_zwj_emoji))
+      eq(2, api.nvim_strwidth(emoji_zwj_emoji))
+    end)
   end)
 
   describe('nvim_get_current_line, nvim_set_current_line', function()
@@ -1467,7 +1628,7 @@ describe('API', function()
       eq(NIL, api.nvim_get_var('Unknown_script_func'))
 
       -- Check if autoload works properly
-      local pathsep = helpers.get_pathsep()
+      local pathsep = n.get_pathsep()
       local xconfig = 'Xhome' .. pathsep .. 'Xconfig'
       local xdata = 'Xhome' .. pathsep .. 'Xdata'
       local autoload_folder = table.concat({ xconfig, 'nvim', 'autoload' }, pathsep)
@@ -1482,9 +1643,11 @@ describe('API', function()
 
     it('nvim_get_vvar, nvim_set_vvar', function()
       eq('Key is read-only: count', pcall_err(request, 'nvim_set_vvar', 'count', 42))
-      eq('Dictionary is locked', pcall_err(request, 'nvim_set_vvar', 'nosuchvar', 42))
+      eq('Dict is locked', pcall_err(request, 'nvim_set_vvar', 'nosuchvar', 42))
       api.nvim_set_vvar('errmsg', 'set by API')
       eq('set by API', api.nvim_get_vvar('errmsg'))
+      api.nvim_set_vvar('completed_item', { word = 'a', user_data = vim.empty_dict() })
+      eq({}, api.nvim_get_vvar('completed_item')['user_data'])
       api.nvim_set_vvar('errmsg', 42)
       eq('42', eval('v:errmsg'))
       api.nvim_set_vvar('oldfiles', { 'one', 'two' })
@@ -1512,16 +1675,12 @@ describe('API', function()
       eq({ 1, 5 }, api.nvim_win_get_cursor(0))
 
       local screen = Screen.new(60, 3)
-      screen:set_default_attr_ids({
-        [0] = { bold = true, foreground = Screen.colors.Blue },
-        [1] = { background = Screen.colors.Yellow },
-      })
       screen:attach()
       eq(1, eval('v:hlsearch'))
       screen:expect {
         grid = [[
-         {1:foo} {1:^foo} {1:foo}                                                |
-        {0:~                                                           }|
+         {10:foo} {10:^foo} {10:foo}                                                |
+        {1:~                                                           }|
                                                                     |
       ]],
       }
@@ -1530,7 +1689,7 @@ describe('API', function()
       screen:expect {
         grid = [[
          foo ^foo foo                                                |
-        {0:~                                                           }|
+        {1:~                                                           }|
                                                                     |
       ]],
       }
@@ -1538,8 +1697,8 @@ describe('API', function()
       eq(1, eval('v:hlsearch'))
       screen:expect {
         grid = [[
-         {1:foo} {1:^foo} {1:foo}                                                |
-        {0:~                                                           }|
+         {10:foo} {10:^foo} {10:foo}                                                |
+        {1:~                                                           }|
                                                                     |
       ]],
       }
@@ -1560,9 +1719,9 @@ describe('API', function()
       eq(val2, request('vim_del_var', 'lua'))
     end)
 
-    it('truncates values with NULs in them', function()
+    it('preserves values with NULs in them', function()
       api.nvim_set_var('xxx', 'ab\0cd')
-      eq('ab', api.nvim_get_var('xxx'))
+      eq('ab\000cd', api.nvim_get_var('xxx'))
     end)
   end)
 
@@ -1593,14 +1752,12 @@ describe('API', function()
       api.nvim_set_option_value('equalalways', false, {})
       local status, rv = pcall(command_output, 'verbose set equalalways?')
       eq(true, status)
-      ok(
-        nil ~= string.find(rv, 'noequalalways\n' .. '\tLast set from API client %(channel id %d+%)')
-      )
+      matches('noequalalways\n' .. '\tLast set from API client %(channel id %d+%)', rv)
 
       api.nvim_exec_lua('vim.api.nvim_set_option_value("equalalways", true, {})', {})
       status, rv = pcall(command_output, 'verbose set equalalways?')
       eq(true, status)
-      eq('  equalalways\n\tLast set from Lua', rv)
+      eq('  equalalways\n\tLast set from Lua (run Nvim with -V1 for more details)', rv)
     end)
 
     it('updates whether the option has ever been set #25025', function()
@@ -1953,7 +2110,7 @@ describe('API', function()
 
   describe('RPC (K_EVENT)', function()
     it('does not complete ("interrupt") normal-mode operator-pending #6166', function()
-      helpers.insert([[
+      n.insert([[
         FIRST LINE
         SECOND LINE]])
       api.nvim_input('gg')
@@ -1981,16 +2138,16 @@ describe('API', function()
       -- Make any RPC request (can be non-async: op-pending does not block).
       api.nvim_get_current_buf()
       screen:expect([[
-       ^a$                  |
-       b$                  |
-       c$                  |
+       ^a{1:$}                  |
+       b{1:$}                  |
+       c{1:$}                  |
                            |
       ]])
     end)
 
     it('does not complete ("interrupt") normal-mode map-pending #6166', function()
       command("nnoremap dd :let g:foo='it worked...'<CR>")
-      helpers.insert([[
+      n.insert([[
         FIRST LINE
         SECOND LINE]])
       api.nvim_input('gg')
@@ -2002,13 +2159,13 @@ describe('API', function()
       expect([[
         FIRST LINE
         SECOND LINE]])
-      eq('it worked...', helpers.eval('g:foo'))
+      eq('it worked...', n.eval('g:foo'))
     end)
 
     it('does not complete ("interrupt") insert-mode map-pending #6166', function()
       command('inoremap xx foo')
       command('set timeoutlen=9999')
-      helpers.insert([[
+      n.insert([[
         FIRST LINE
         SECOND LINE]])
       api.nvim_input('ix')
@@ -2125,7 +2282,7 @@ describe('API', function()
   end)
 
   describe('nvim_load_context', function()
-    it('sets current editor state to given context dictionary', function()
+    it('sets current editor state to given context dict', function()
       local opts = { types = { 'regs', 'jumps', 'bufs', 'gvars' } }
       eq({}, parse_context(api.nvim_get_context(opts)))
 
@@ -2141,7 +2298,7 @@ describe('API', function()
       eq({ 1, 2, 3 }, eval('[g:one, g:Two, g:THREE]'))
     end)
 
-    it('errors when context dictionary is invalid', function()
+    it('errors when context dict is invalid', function()
       eq(
         'E474: Failed to convert list to msgpack string buffer',
         pcall_err(api.nvim_load_context, { regs = { {} }, jumps = { {} } })
@@ -2155,35 +2312,32 @@ describe('API', function()
 
   describe('nvim_replace_termcodes', function()
     it('escapes K_SPECIAL as K_SPECIAL KS_SPECIAL KE_FILLER', function()
-      eq('\128\254X', helpers.api.nvim_replace_termcodes('\128', true, true, true))
+      eq('\128\254X', n.api.nvim_replace_termcodes('\128', true, true, true))
     end)
 
     it('leaves non-K_SPECIAL string unchanged', function()
-      eq('abc', helpers.api.nvim_replace_termcodes('abc', true, true, true))
+      eq('abc', n.api.nvim_replace_termcodes('abc', true, true, true))
     end)
 
     it('converts <expressions>', function()
-      eq('\\', helpers.api.nvim_replace_termcodes('<Leader>', true, true, true))
+      eq('\\', n.api.nvim_replace_termcodes('<Leader>', true, true, true))
     end)
 
     it('converts <LeftMouse> to K_SPECIAL KS_EXTRA KE_LEFTMOUSE', function()
       -- K_SPECIAL KS_EXTRA KE_LEFTMOUSE
       -- 0x80      0xfd     0x2c
       -- 128       253      44
-      eq('\128\253\44', helpers.api.nvim_replace_termcodes('<LeftMouse>', true, true, true))
+      eq('\128\253\44', n.api.nvim_replace_termcodes('<LeftMouse>', true, true, true))
     end)
 
     it('converts keycodes', function()
-      eq(
-        '\nx\27x\rx<x',
-        helpers.api.nvim_replace_termcodes('<NL>x<Esc>x<CR>x<lt>x', true, true, true)
-      )
+      eq('\nx\27x\rx<x', n.api.nvim_replace_termcodes('<NL>x<Esc>x<CR>x<lt>x', true, true, true))
     end)
 
     it('does not convert keycodes if special=false', function()
       eq(
         '<NL>x<Esc>x<CR>x<lt>x',
-        helpers.api.nvim_replace_termcodes('<NL>x<Esc>x<CR>x<lt>x', true, true, false)
+        n.api.nvim_replace_termcodes('<NL>x<Esc>x<CR>x<lt>x', true, true, false)
       )
     end)
 
@@ -2212,18 +2366,18 @@ describe('API', function()
         api.nvim_feedkeys(':let x1="…"\n', '', true)
 
         -- Both nvim_replace_termcodes and nvim_feedkeys escape \x80
-        local inp = helpers.api.nvim_replace_termcodes(':let x2="…"<CR>', true, true, true)
+        local inp = n.api.nvim_replace_termcodes(':let x2="…"<CR>', true, true, true)
         api.nvim_feedkeys(inp, '', true) -- escape_ks=true
 
         -- nvim_feedkeys with K_SPECIAL escaping disabled
-        inp = helpers.api.nvim_replace_termcodes(':let x3="…"<CR>', true, true, true)
+        inp = n.api.nvim_replace_termcodes(':let x3="…"<CR>', true, true, true)
         api.nvim_feedkeys(inp, '', false) -- escape_ks=false
 
-        helpers.stop()
+        n.stop()
       end
 
       -- spin the loop a bit
-      helpers.run(nil, nil, on_setup)
+      n.run(nil, nil, on_setup)
 
       eq('…', api.nvim_get_var('x1'))
       -- Because of the double escaping this is neq
@@ -2238,12 +2392,6 @@ describe('API', function()
     before_each(function()
       screen = Screen.new(40, 8)
       screen:attach()
-      screen:set_default_attr_ids({
-        [0] = { bold = true, foreground = Screen.colors.Blue },
-        [1] = { bold = true, foreground = Screen.colors.SeaGreen },
-        [2] = { bold = true, reverse = true },
-        [3] = { foreground = Screen.colors.Blue },
-      })
     end)
 
     it('prints long messages correctly #20534', function()
@@ -2271,11 +2419,11 @@ describe('API', function()
       screen:expect {
         grid = [[
                                                 |
-        {0:~                                       }|*3
-        {2:                                        }|
+        {1:~                                       }|*3
+        {3:                                        }|
                                                 |
         a                                       |
-        {1:Press ENTER or type command to continue}^ |
+        {6:Press ENTER or type command to continue}^ |
       ]],
       }
       feed('<CR>')
@@ -2283,12 +2431,12 @@ describe('API', function()
       screen:expect {
         grid = [[
                                                 |
-        {0:~                                       }|*2
-        {2:                                        }|
+        {1:~                                       }|*2
+        {3:                                        }|
         b                                       |
                                                 |
         c                                       |
-        {1:Press ENTER or type command to continue}^ |
+        {6:Press ENTER or type command to continue}^ |
       ]],
       }
     end)
@@ -2298,11 +2446,11 @@ describe('API', function()
       screen:expect {
         grid = [[
                                                 |
-        {0:~                                       }|*3
-        {2:                                        }|
-        aaa{3:^@}bbb{3:^@^@}ccc                         |
-        ddd{3:^@^@^@}eee                            |
-        {1:Press ENTER or type command to continue}^ |
+        {1:~                                       }|*3
+        {3:                                        }|
+        aaa{18:^@}bbb{18:^@^@}ccc                         |
+        ddd{18:^@^@^@}eee                            |
+        {6:Press ENTER or type command to continue}^ |
       ]],
       }
     end)
@@ -2314,20 +2462,14 @@ describe('API', function()
     before_each(function()
       screen = Screen.new(40, 8)
       screen:attach()
-      screen:set_default_attr_ids({
-        [0] = { bold = true, foreground = Screen.colors.Blue },
-        [1] = { foreground = Screen.colors.White, background = Screen.colors.Red },
-        [2] = { bold = true, foreground = Screen.colors.SeaGreen },
-        [3] = { bold = true, reverse = true },
-      })
     end)
 
     it('can show one line', function()
       async_meths.nvim_err_write('has bork\n')
       screen:expect([[
         ^                                        |
-        {0:~                                       }|*6
-        {1:has bork}                                |
+        {1:~                                       }|*6
+        {9:has bork}                                |
       ]])
     end)
 
@@ -2335,11 +2477,11 @@ describe('API', function()
       async_meths.nvim_err_write('something happened\nvery bad\n')
       screen:expect([[
                                                 |
-        {0:~                                       }|*3
+        {1:~                                       }|*3
         {3:                                        }|
-        {1:something happened}                      |
-        {1:very bad}                                |
-        {2:Press ENTER or type command to continue}^ |
+        {9:something happened}                      |
+        {9:very bad}                                |
+        {6:Press ENTER or type command to continue}^ |
       ]])
     end)
 
@@ -2347,13 +2489,13 @@ describe('API', function()
       async_meths.nvim_err_write('FAILURE\nERROR\nEXCEPTION\nTRACEBACK\n')
       screen:expect([[
                                                 |
-        {0:~                                       }|
+        {1:~                                       }|
         {3:                                        }|
-        {1:FAILURE}                                 |
-        {1:ERROR}                                   |
-        {1:EXCEPTION}                               |
-        {1:TRACEBACK}                               |
-        {2:Press ENTER or type command to continue}^ |
+        {9:FAILURE}                                 |
+        {9:ERROR}                                   |
+        {9:EXCEPTION}                               |
+        {9:TRACEBACK}                               |
+        {6:Press ENTER or type command to continue}^ |
       ]])
     end)
 
@@ -2363,20 +2505,20 @@ describe('API', function()
       async_meths.nvim_err_write('fail\n')
       screen:expect([[
         ^                                        |
-        {0:~                                       }|*6
-        {1:very fail}                               |
+        {1:~                                       }|*6
+        {9:very fail}                               |
       ]])
-      helpers.poke_eventloop()
+      n.poke_eventloop()
 
       -- shows up to &cmdheight lines
       async_meths.nvim_err_write('more fail\ntoo fail\n')
       screen:expect([[
                                                 |
-        {0:~                                       }|*3
+        {1:~                                       }|*3
         {3:                                        }|
-        {1:more fail}                               |
-        {1:too fail}                                |
-        {2:Press ENTER or type command to continue}^ |
+        {9:more fail}                               |
+        {9:too fail}                                |
+        {6:Press ENTER or type command to continue}^ |
       ]])
       feed('<cr>') -- exit the press ENTER screen
     end)
@@ -2386,11 +2528,11 @@ describe('API', function()
       screen:expect {
         grid = [[
                                                 |
-        {0:~                                       }|*3
+        {1:~                                       }|*3
         {3:                                        }|
-        {1:aaa^@bbb^@^@ccc}                         |
-        {1:ddd^@^@^@eee}                            |
-        {2:Press ENTER or type command to continue}^ |
+        {9:aaa^@bbb^@^@ccc}                         |
+        {9:ddd^@^@^@eee}                            |
+        {6:Press ENTER or type command to continue}^ |
       ]],
       }
     end)
@@ -2402,30 +2544,24 @@ describe('API', function()
     before_each(function()
       screen = Screen.new(40, 8)
       screen:attach()
-      screen:set_default_attr_ids({
-        [0] = { bold = true, foreground = Screen.colors.Blue },
-        [1] = { foreground = Screen.colors.White, background = Screen.colors.Red },
-        [2] = { bold = true, foreground = Screen.colors.SeaGreen },
-        [3] = { bold = true, reverse = true },
-      })
     end)
 
     it('shows only one return prompt after all lines are shown', function()
       async_meths.nvim_err_writeln('FAILURE\nERROR\nEXCEPTION\nTRACEBACK')
       screen:expect([[
                                                 |
-        {0:~                                       }|
+        {1:~                                       }|
         {3:                                        }|
-        {1:FAILURE}                                 |
-        {1:ERROR}                                   |
-        {1:EXCEPTION}                               |
-        {1:TRACEBACK}                               |
-        {2:Press ENTER or type command to continue}^ |
+        {9:FAILURE}                                 |
+        {9:ERROR}                                   |
+        {9:EXCEPTION}                               |
+        {9:TRACEBACK}                               |
+        {6:Press ENTER or type command to continue}^ |
       ]])
       feed('<CR>')
       screen:expect([[
         ^                                        |
-        {0:~                                       }|*6
+        {1:~                                       }|*6
                                                 |
       ]])
     end)
@@ -2678,7 +2814,7 @@ describe('API', function()
 
   describe('nvim_list_runtime_paths', function()
     setup(function()
-      local pathsep = helpers.get_pathsep()
+      local pathsep = n.get_pathsep()
       mkdir_p('Xtest' .. pathsep .. 'a')
       mkdir_p('Xtest' .. pathsep .. 'b')
     end)
@@ -2723,7 +2859,7 @@ describe('API', function()
   it('can throw exceptions', function()
     local status, err = pcall(api.nvim_get_option_value, 'invalid-option', {})
     eq(false, status)
-    ok(err:match("Unknown option 'invalid%-option'") ~= nil)
+    matches("Unknown option 'invalid%-option'", err)
   end)
 
   it('does not truncate error message <1 MB #5984', function()
@@ -2736,10 +2872,7 @@ describe('API', function()
   it('does not leak memory on incorrect argument types', function()
     local status, err = pcall(api.nvim_set_current_dir, { 'not', 'a', 'dir' })
     eq(false, status)
-    ok(
-      err:match(': Wrong type for argument 1 when calling nvim_set_current_dir, expecting String')
-        ~= nil
-    )
+    matches(': Wrong type for argument 1 when calling nvim_set_current_dir, expecting String', err)
   end)
 
   describe('nvim_parse_expression', function()
@@ -2951,6 +3084,13 @@ describe('API', function()
         return ('%s(%s)%s'):format(typ, args, rest)
       end
     end
+
+    it('does not crash parsing invalid VimL expression #29648', function()
+      api.nvim_input(':<C-r>=')
+      api.nvim_input('1bork/')
+      assert_alive()
+    end)
+
     require('test.unit.viml.expressions.parser_tests')(it, _check_parsing, hl, fmtn)
   end)
 
@@ -3089,9 +3229,6 @@ describe('API', function()
       eq(1, api.nvim_get_current_buf())
 
       local screen = Screen.new(20, 4)
-      screen:set_default_attr_ids({
-        [1] = { bold = true, foreground = Screen.colors.Blue1 },
-      })
       screen:attach()
 
       --
@@ -3135,10 +3272,60 @@ describe('API', function()
       -- nowadays this works because we don't execute any spurious autocmds at all #24824
       assert_alive()
     end)
+
+    it('no memory leak when autocommands load the buffer immediately', function()
+      exec([[
+        autocmd BufNew * ++once call bufload(expand("<abuf>")->str2nr())
+                             \| let loaded = bufloaded(expand("<abuf>")->str2nr())
+      ]])
+      api.nvim_create_buf(false, true)
+      eq(1, eval('g:loaded'))
+    end)
+
+    it('creating scratch buffer where autocommands set &swapfile works', function()
+      exec([[
+        autocmd BufNew * ++once execute expand("<abuf>") "buffer"
+                             \| file foobar
+                             \| setlocal swapfile
+      ]])
+      local new_buf = api.nvim_create_buf(false, true)
+      neq('', fn.swapname(new_buf))
+    end)
+
+    it('fires expected autocommands', function()
+      exec([=[
+        " Append the &buftype to check autocommands trigger *after* the buffer was configured to be
+        " scratch, if applicable.
+        autocmd BufNew * let fired += [["BufNew", expand("<abuf>")->str2nr(),
+                                      \ getbufvar(expand("<abuf>")->str2nr(), "&buftype")]]
+        autocmd BufAdd * let fired += [["BufAdd", expand("<abuf>")->str2nr(),
+                                      \ getbufvar(expand("<abuf>")->str2nr(), "&buftype")]]
+
+        " Don't want to see OptionSet; buffer options set from passing true for "scratch", etc.
+        " should be configured invisibly, and before autocommands.
+        autocmd OptionSet * let fired += [["OptionSet", expand("<amatch>")]]
+
+        let fired = []
+      ]=])
+      local new_buf = api.nvim_create_buf(false, false)
+      eq({ { 'BufNew', new_buf, '' } }, eval('g:fired'))
+
+      command('let fired = []')
+      new_buf = api.nvim_create_buf(false, true)
+      eq({ { 'BufNew', new_buf, 'nofile' } }, eval('g:fired'))
+
+      command('let fired = []')
+      new_buf = api.nvim_create_buf(true, false)
+      eq({ { 'BufNew', new_buf, '' }, { 'BufAdd', new_buf, '' } }, eval('g:fired'))
+
+      command('let fired = []')
+      new_buf = api.nvim_create_buf(true, true)
+      eq({ { 'BufNew', new_buf, 'nofile' }, { 'BufAdd', new_buf, 'nofile' } }, eval('g:fired'))
+    end)
   end)
 
   describe('nvim_get_runtime_file', function()
-    local p = helpers.alter_slashes
+    local p = t.fix_slashes
     it('can find files', function()
       eq({}, api.nvim_get_runtime_file('bork.borkbork', false))
       eq({}, api.nvim_get_runtime_file('bork.borkbork', true))
@@ -3147,36 +3334,36 @@ describe('API', function()
       local val = api.nvim_get_runtime_file('autoload/remote/*.vim', true)
       eq(2, #val)
       if endswith(val[1], 'define.vim') then
-        ok(endswith(val[1], p 'autoload/remote/define.vim'))
-        ok(endswith(val[2], p 'autoload/remote/host.vim'))
+        ok(endswith(p(val[1]), 'autoload/remote/define.vim'))
+        ok(endswith(p(val[2]), 'autoload/remote/host.vim'))
       else
-        ok(endswith(val[1], p 'autoload/remote/host.vim'))
-        ok(endswith(val[2], p 'autoload/remote/define.vim'))
+        ok(endswith(p(val[1]), 'autoload/remote/host.vim'))
+        ok(endswith(p(val[2]), 'autoload/remote/define.vim'))
       end
       val = api.nvim_get_runtime_file('autoload/remote/*.vim', false)
       eq(1, #val)
       ok(
-        endswith(val[1], p 'autoload/remote/define.vim')
-          or endswith(val[1], p 'autoload/remote/host.vim')
+        endswith(p(val[1]), 'autoload/remote/define.vim')
+          or endswith(p(val[1]), 'autoload/remote/host.vim')
       )
 
       val = api.nvim_get_runtime_file('lua', true)
       eq(1, #val)
-      ok(endswith(val[1], p 'lua'))
+      ok(endswith(p(val[1]), 'lua'))
 
       val = api.nvim_get_runtime_file('lua/vim', true)
       eq(1, #val)
-      ok(endswith(val[1], p 'lua/vim'))
+      ok(endswith(p(val[1]), 'lua/vim'))
     end)
 
     it('can find directories', function()
       local val = api.nvim_get_runtime_file('lua/', true)
       eq(1, #val)
-      ok(endswith(val[1], p 'lua/'))
+      ok(endswith(p(val[1]), 'lua/'))
 
       val = api.nvim_get_runtime_file('lua/vim/', true)
       eq(1, #val)
-      ok(endswith(val[1], p 'lua/vim/'))
+      ok(endswith(p(val[1]), 'lua/vim/'))
 
       eq({}, api.nvim_get_runtime_file('foobarlang/', true))
     end)
@@ -3189,6 +3376,16 @@ describe('API', function()
         'Vim(echo):E5555: API call: Vim:E220: Missing }.',
         exc_exec("echo nvim_get_runtime_file('{', v:false)")
       )
+    end)
+    it('preserves order of runtimepath', function()
+      local vimruntime = fn.getenv('VIMRUNTIME')
+      local rtp = string.format('%s/syntax,%s/ftplugin', vimruntime, vimruntime)
+      api.nvim_set_option_value('runtimepath', rtp, {})
+
+      local val = api.nvim_get_runtime_file('vim.vim', true)
+      eq(2, #val)
+      eq(p(val[1]), vimruntime .. '/syntax/vim.vim')
+      eq(p(val[2]), vimruntime .. '/ftplugin/vim.vim')
     end)
   end)
 
@@ -3365,13 +3562,13 @@ describe('API', function()
         {desc="(global option, fallback requested) points to global",          linenr=9, sid=1, args={'completeopt', {}}},
       }
 
-      for _, t in pairs(tests) do
-        it(t.desc, function()
+      for _, test in pairs(tests) do
+        it(test.desc, function()
           -- Switch to the target buffer/window so that curbuf/curwin are used.
           api.nvim_set_current_win(wins[2])
-          local info = api.nvim_get_option_info2(unpack(t.args))
-          eq(t.linenr, info.last_set_linenr)
-          eq(t.sid, info.last_set_sid)
+          local info = api.nvim_get_option_info2(unpack(test.args))
+          eq(test.linenr, info.last_set_linenr)
+          eq(test.sid, info.last_set_sid)
         end)
       end
 
@@ -3395,13 +3592,6 @@ describe('API', function()
     before_each(function()
       screen = Screen.new(40, 8)
       screen:attach()
-      screen:set_default_attr_ids({
-        [0] = { bold = true, foreground = Screen.colors.Blue },
-        [1] = { bold = true, foreground = Screen.colors.SeaGreen },
-        [2] = { bold = true, reverse = true },
-        [3] = { foreground = Screen.colors.Brown, bold = true }, -- Statement
-        [4] = { foreground = Screen.colors.SlateBlue }, -- Special
-      })
       command('highlight Statement gui=bold guifg=Brown')
       command('highlight Special guifg=SlateBlue')
     end)
@@ -3411,7 +3601,7 @@ describe('API', function()
       screen:expect {
         grid = [[
         ^                                        |
-        {0:~                                       }|*6
+        {1:~                                       }|*6
         msg                                     |
       ]],
       }
@@ -3426,8 +3616,8 @@ describe('API', function()
       screen:expect {
         grid = [[
         ^                                        |
-        {0:~                                       }|*6
-        msg_a{3:msg_b}{4:msg_c}                         |
+        {1:~                                       }|*6
+        msg_a{15:msg_b}{16:msg_c}                         |
       ]],
       }
     end)
@@ -3437,11 +3627,11 @@ describe('API', function()
       screen:expect {
         grid = [[
                                                 |
-        {0:~                                       }|*3
-        {2:                                        }|
-        {3:msg_a}                                   |
-        {3:msg_a}{4:msg_b}                              |
-        {1:Press ENTER or type command to continue}^ |
+        {1:~                                       }|*3
+        {3:                                        }|
+        {15:msg_a}                                   |
+        {15:msg_a}{16:msg_b}                              |
+        {6:Press ENTER or type command to continue}^ |
       ]],
       }
     end)
@@ -3465,24 +3655,16 @@ describe('API', function()
     before_each(function()
       screen = Screen.new(100, 35)
       screen:attach()
-      screen:set_default_attr_ids({
-        [0] = { bold = true, foreground = Screen.colors.Blue },
-        [1] = { background = Screen.colors.Plum1 },
-        [2] = { background = tonumber('0xffff40'), bg_indexed = true },
-        [3] = {
-          background = Screen.colors.Plum1,
-          fg_indexed = true,
-          foreground = tonumber('0x00e000'),
-        },
-        [4] = { bold = true, reverse = true, background = Screen.colors.Plum1 },
-        [5] = {
-          foreground = Screen.colors.Blue,
+      screen:add_extra_attr_ids {
+        [100] = { background = tonumber('0xffff40'), bg_indexed = true },
+        [101] = {
           background = Screen.colors.LightMagenta,
-          bold = true,
+          foreground = tonumber('0x00e000'),
+          fg_indexed = true,
         },
-        [6] = { bold = true },
-        [7] = { reverse = true, background = Screen.colors.LightMagenta },
-      })
+        [102] = { background = Screen.colors.LightMagenta, reverse = true },
+        [103] = { background = Screen.colors.LightMagenta, bold = true, reverse = true },
+      }
     end)
 
     it('can batch process sequences', function()
@@ -3492,44 +3674,44 @@ describe('API', function()
         false,
         { width = 79, height = 31, row = 1, col = 1, relative = 'editor' }
       )
-      local t = api.nvim_open_term(b, {})
+      local term = api.nvim_open_term(b, {})
 
-      api.nvim_chan_send(t, io.open('test/functional/fixtures/smile2.cat', 'r'):read('*a'))
+      api.nvim_chan_send(term, io.open('test/functional/fixtures/smile2.cat', 'r'):read('*a'))
       screen:expect {
         grid = [[
         ^                                                                                                    |
-        {0:~}{1::smile                                                                         }{0:                    }|
-        {0:~}{1:                            }{2:oooo$$$$$$$$$$$$oooo}{1:                               }{0:                    }|
-        {0:~}{1:                        }{2:oo$$$$$$$$$$$$$$$$$$$$$$$$o}{1:                            }{0:                    }|
-        {0:~}{1:                     }{2:oo$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$o}{1:         }{2:o$}{1:   }{2:$$}{1: }{2:o$}{1:      }{0:                    }|
-        {0:~}{1:     }{2:o}{1: }{2:$}{1: }{2:oo}{1:        }{2:o$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$o}{1:       }{2:$$}{1: }{2:$$}{1: }{2:$$o$}{1:     }{0:                    }|
-        {0:~}{1:  }{2:oo}{1: }{2:$}{1: }{2:$}{1: "}{2:$}{1:      }{2:o$$$$$$$$$}{1:    }{2:$$$$$$$$$$$$$}{1:    }{2:$$$$$$$$$o}{1:       }{2:$$$o$$o$}{1:      }{0:                    }|
-        {0:~}{1:  "}{2:$$$$$$o$}{1:     }{2:o$$$$$$$$$}{1:      }{2:$$$$$$$$$$$}{1:      }{2:$$$$$$$$$$o}{1:    }{2:$$$$$$$$}{1:       }{0:                    }|
-        {0:~}{1:    }{2:$$$$$$$}{1:    }{2:$$$$$$$$$$$}{1:      }{2:$$$$$$$$$$$}{1:      }{2:$$$$$$$$$$$$$$$$$$$$$$$}{1:       }{0:                    }|
-        {0:~}{1:    }{2:$$$$$$$$$$$$$$$$$$$$$$$}{1:    }{2:$$$$$$$$$$$$$}{1:    }{2:$$$$$$$$$$$$$$}{1:  """}{2:$$$}{1:         }{0:                    }|
-        {0:~}{1:     "}{2:$$$}{1:""""}{2:$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$}{1:     "}{2:$$$}{1:        }{0:                    }|
-        {0:~}{1:      }{2:$$$}{1:   }{2:o$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$}{1:     "}{2:$$$o}{1:      }{0:                    }|
-        {0:~}{1:     }{2:o$$}{1:"   }{2:$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$}{1:       }{2:$$$o}{1:     }{0:                    }|
-        {0:~}{1:     }{2:$$$}{1:    }{2:$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$}{1:" "}{2:$$$$$$ooooo$$$$o}{1:   }{0:                    }|
-        {0:~}{1:    }{2:o$$$oooo$$$$$}{1:  }{2:$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$}{1:   }{2:o$$$$$$$$$$$$$$$$$}{1:  }{0:                    }|
-        {0:~}{1:    }{2:$$$$$$$$}{1:"}{2:$$$$}{1:   }{2:$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$}{1:     }{2:$$$$}{1:""""""""        }{0:                    }|
-        {0:~}{1:   """"       }{2:$$$$}{1:    "}{2:$$$$$$$$$$$$$$$$$$$$$$$$$$$$}{1:"      }{2:o$$$}{1:                 }{0:                    }|
-        {0:~}{1:              "}{2:$$$o}{1:     """}{2:$$$$$$$$$$$$$$$$$$}{1:"}{2:$$}{1:"         }{2:$$$}{1:                  }{0:                    }|
-        {0:~}{1:                }{2:$$$o}{1:          "}{2:$$}{1:""}{2:$$$$$$}{1:""""           }{2:o$$$}{1:                   }{0:                    }|
-        {0:~}{1:                 }{2:$$$$o}{1:                                }{2:o$$$}{1:"                    }{0:                    }|
-        {0:~}{1:                  "}{2:$$$$o}{1:      }{2:o$$$$$$o}{1:"}{2:$$$$o}{1:        }{2:o$$$$}{1:                      }{0:                    }|
-        {0:~}{1:                    "}{2:$$$$$oo}{1:     ""}{2:$$$$o$$$$$o}{1:   }{2:o$$$$}{1:""                       }{0:                    }|
-        {0:~}{1:                       ""}{2:$$$$$oooo}{1:  "}{2:$$$o$$$$$$$$$}{1:"""                          }{0:                    }|
-        {0:~}{1:                          ""}{2:$$$$$$$oo}{1: }{2:$$$$$$$$$$}{1:                               }{0:                    }|
-        {0:~}{1:                                  """"}{2:$$$$$$$$$$$}{1:                              }{0:                    }|
-        {0:~}{1:                                      }{2:$$$$$$$$$$$$}{1:                             }{0:                    }|
-        {0:~}{1:                                       }{2:$$$$$$$$$$}{1:"                             }{0:                    }|
-        {0:~}{1:                                        "}{2:$$$}{1:""""                               }{0:                    }|
-        {0:~}{1:                                                                               }{0:                    }|
-        {0:~}{3:Press ENTER or type command to continue}{1:                                        }{0:                    }|
-        {0:~}{4:term://~/config2/docs/pres//32693:vim --clean +smile         29,39          All}{0:                    }|
-        {0:~}{1::call nvim__screenshot("smile2.cat")                                           }{0:                    }|
-        {0:~                                                                                                   }|*2
+        {1:~}{4::smile                                                                         }{1:                    }|
+        {1:~}{4:                            }{100:oooo$$$$$$$$$$$$oooo}{4:                               }{1:                    }|
+        {1:~}{4:                        }{100:oo$$$$$$$$$$$$$$$$$$$$$$$$o}{4:                            }{1:                    }|
+        {1:~}{4:                     }{100:oo$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$o}{4:         }{100:o$}{4:   }{100:$$}{4: }{100:o$}{4:      }{1:                    }|
+        {1:~}{4:     }{100:o}{4: }{100:$}{4: }{100:oo}{4:        }{100:o$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$o}{4:       }{100:$$}{4: }{100:$$}{4: }{100:$$o$}{4:     }{1:                    }|
+        {1:~}{4:  }{100:oo}{4: }{100:$}{4: }{100:$}{4: "}{100:$}{4:      }{100:o$$$$$$$$$}{4:    }{100:$$$$$$$$$$$$$}{4:    }{100:$$$$$$$$$o}{4:       }{100:$$$o$$o$}{4:      }{1:                    }|
+        {1:~}{4:  "}{100:$$$$$$o$}{4:     }{100:o$$$$$$$$$}{4:      }{100:$$$$$$$$$$$}{4:      }{100:$$$$$$$$$$o}{4:    }{100:$$$$$$$$}{4:       }{1:                    }|
+        {1:~}{4:    }{100:$$$$$$$}{4:    }{100:$$$$$$$$$$$}{4:      }{100:$$$$$$$$$$$}{4:      }{100:$$$$$$$$$$$$$$$$$$$$$$$}{4:       }{1:                    }|
+        {1:~}{4:    }{100:$$$$$$$$$$$$$$$$$$$$$$$}{4:    }{100:$$$$$$$$$$$$$}{4:    }{100:$$$$$$$$$$$$$$}{4:  """}{100:$$$}{4:         }{1:                    }|
+        {1:~}{4:     "}{100:$$$}{4:""""}{100:$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$}{4:     "}{100:$$$}{4:        }{1:                    }|
+        {1:~}{4:      }{100:$$$}{4:   }{100:o$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$}{4:     "}{100:$$$o}{4:      }{1:                    }|
+        {1:~}{4:     }{100:o$$}{4:"   }{100:$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$}{4:       }{100:$$$o}{4:     }{1:                    }|
+        {1:~}{4:     }{100:$$$}{4:    }{100:$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$}{4:" "}{100:$$$$$$ooooo$$$$o}{4:   }{1:                    }|
+        {1:~}{4:    }{100:o$$$oooo$$$$$}{4:  }{100:$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$}{4:   }{100:o$$$$$$$$$$$$$$$$$}{4:  }{1:                    }|
+        {1:~}{4:    }{100:$$$$$$$$}{4:"}{100:$$$$}{4:   }{100:$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$}{4:     }{100:$$$$}{4:""""""""        }{1:                    }|
+        {1:~}{4:   """"       }{100:$$$$}{4:    "}{100:$$$$$$$$$$$$$$$$$$$$$$$$$$$$}{4:"      }{100:o$$$}{4:                 }{1:                    }|
+        {1:~}{4:              "}{100:$$$o}{4:     """}{100:$$$$$$$$$$$$$$$$$$}{4:"}{100:$$}{4:"         }{100:$$$}{4:                  }{1:                    }|
+        {1:~}{4:                }{100:$$$o}{4:          "}{100:$$}{4:""}{100:$$$$$$}{4:""""           }{100:o$$$}{4:                   }{1:                    }|
+        {1:~}{4:                 }{100:$$$$o}{4:                                }{100:o$$$}{4:"                    }{1:                    }|
+        {1:~}{4:                  "}{100:$$$$o}{4:      }{100:o$$$$$$o}{4:"}{100:$$$$o}{4:        }{100:o$$$$}{4:                      }{1:                    }|
+        {1:~}{4:                    "}{100:$$$$$oo}{4:     ""}{100:$$$$o$$$$$o}{4:   }{100:o$$$$}{4:""                       }{1:                    }|
+        {1:~}{4:                       ""}{100:$$$$$oooo}{4:  "}{100:$$$o$$$$$$$$$}{4:"""                          }{1:                    }|
+        {1:~}{4:                          ""}{100:$$$$$$$oo}{4: }{100:$$$$$$$$$$}{4:                               }{1:                    }|
+        {1:~}{4:                                  """"}{100:$$$$$$$$$$$}{4:                              }{1:                    }|
+        {1:~}{4:                                      }{100:$$$$$$$$$$$$}{4:                             }{1:                    }|
+        {1:~}{4:                                       }{100:$$$$$$$$$$}{4:"                             }{1:                    }|
+        {1:~}{4:                                        "}{100:$$$}{4:""""                               }{1:                    }|
+        {1:~}{4:                                                                               }{1:                    }|
+        {1:~}{101:Press ENTER or type command to continue}{4:                                        }{1:                    }|
+        {1:~}{103:term://~/config2/docs/pres//32693:vim --clean +smile         29,39          All}{1:                    }|
+        {1:~}{4::call nvim__screenshot("smile2.cat")                                           }{1:                    }|
+        {1:~                                                                                                   }|*2
                                                                                                             |
       ]],
       }
@@ -3561,9 +3743,9 @@ describe('API', function()
       screen:expect {
         grid = [[
                                                           |
-        {0:~}{1:^                                        }{0:         }|
-        {0:~}{1:                                        }{0:         }|*4
-        {0:~                                                 }|*3
+        {1:~}{4:^                                        }{1:         }|
+        {1:~}{4:                                        }{1:         }|*4
+        {1:~                                                 }|*3
                                                           |
       ]],
       }
@@ -3572,10 +3754,10 @@ describe('API', function()
       screen:expect {
         grid = [[
                                                           |
-        {0:~}{7: }{1:                                       }{0:         }|
-        {0:~}{1:                                        }{0:         }|*4
-        {0:~                                                 }|*3
-        {6:-- TERMINAL --}                                    |
+        {1:~}{102: }{4:                                       }{1:         }|
+        {1:~}{4:                                        }{1:         }|*4
+        {1:~                                                 }|*3
+        {5:-- TERMINAL --}                                    |
       ]],
       }
 
@@ -3588,10 +3770,10 @@ describe('API', function()
       screen:expect {
         grid = [[
                                                           |
-        {0:~}{1:herrejösses!}{7: }{1:                           }{0:         }|
-        {0:~}{1:                                        }{0:         }|*4
-        {0:~                                                 }|*3
-        {6:-- TERMINAL --}                                    |
+        {1:~}{4:herrejösses!}{102: }{4:                           }{1:         }|
+        {1:~}{4:                                        }{1:         }|*4
+        {1:~                                                 }|*3
+        {5:-- TERMINAL --}                                    |
       ]],
       }
       eq('ba\024blaherrejösses!', exec_lua [[ return stream ]])
@@ -3620,7 +3802,7 @@ describe('API', function()
       api.nvim_buf_set_name(buf, 'mybuf')
       local mark = api.nvim_get_mark('F', {})
       -- Compare the path tail only
-      assert(string.find(mark[4], 'mybuf$'))
+      matches('mybuf$', mark[4])
       eq({ 2, 2, buf, mark[4] }, mark)
     end)
     it('validation', function()
@@ -3855,13 +4037,13 @@ describe('API', function()
           norm 4G
         ]])
         eq({
-          str = '││aabb 4 ',
+          str = '││bbaa 4 ',
           width = 9,
           highlights = {
             { group = 'CursorLineFold', start = 0 },
             { group = 'Normal', start = 6 },
-            { group = 'IncSearch', start = 6 },
-            { group = 'ErrorMsg', start = 8 },
+            { group = 'ErrorMsg', start = 6 },
+            { group = 'IncSearch', start = 8 },
             { group = 'Normal', start = 10 },
           },
         }, api.nvim_eval_statusline(
@@ -3870,11 +4052,11 @@ describe('API', function()
         ))
         eq(
           {
-            str = '3 ',
-            width = 2,
+            str = '       3 ',
+            width = 9,
             highlights = {
               { group = 'LineNr', start = 0 },
-              { group = 'ErrorMsg', start = 1 },
+              { group = 'ErrorMsg', start = 8 },
             },
           },
           api.nvim_eval_statusline('%l%#ErrorMsg# ', { use_statuscol_lnum = 3, highlights = true })
@@ -4409,10 +4591,6 @@ describe('API', function()
     end)
     it('does not interfere with printing line in Ex mode #19400', function()
       local screen = Screen.new(60, 7)
-      screen:set_default_attr_ids({
-        [0] = { bold = true, foreground = Screen.colors.Blue }, -- NonText
-        [1] = { bold = true, reverse = true }, -- MsgSeparator
-      })
       screen:attach()
       insert([[
         foo
@@ -4421,8 +4599,8 @@ describe('API', function()
       screen:expect([[
         foo                                                         |
         bar                                                         |
-        {0:~                                                           }|*2
-        {1:                                                            }|
+        {1:~                                                           }|*2
+        {3:                                                            }|
         Entering Ex mode.  Type "visual" to go to Normal mode.      |
         :1^                                                          |
       ]])
@@ -4431,7 +4609,7 @@ describe('API', function()
       screen:expect([[
         foo                                                         |
         bar                                                         |
-        {1:                                                            }|
+        {3:                                                            }|
         Entering Ex mode.  Type "visual" to go to Normal mode.      |
         :1                                                          |
         foo                                                         |
@@ -4871,14 +5049,11 @@ describe('API', function()
     it("doesn't display messages when output=true", function()
       local screen = Screen.new(40, 6)
       screen:attach()
-      screen:set_default_attr_ids({
-        [0] = { bold = true, foreground = Screen.colors.Blue },
-      })
       api.nvim_cmd({ cmd = 'echo', args = { [['hello']] } }, { output = true })
       screen:expect {
         grid = [[
         ^                                        |
-        {0:~                                       }|*4
+        {1:~                                       }|*4
                                                 |
       ]],
       }
@@ -4891,7 +5066,7 @@ describe('API', function()
       screen:expect {
         grid = [[
         ^                                        |
-        {0:~                                       }|*4
+        {1:~                                       }|*4
         15                                      |
       ]],
       }
@@ -4952,5 +5127,238 @@ describe('API', function()
       assert_alive()
       eq(false, exec_lua('return _G.success'))
     end)
+  end)
+
+  it('nvim__redraw', function()
+    local screen = Screen.new(60, 5)
+    screen:attach()
+    eq('at least one action required', pcall_err(api.nvim__redraw, {}))
+    eq('at least one action required', pcall_err(api.nvim__redraw, { buf = 0 }))
+    eq('at least one action required', pcall_err(api.nvim__redraw, { win = 0 }))
+    eq("cannot use both 'buf' and 'win'", pcall_err(api.nvim__redraw, { buf = 0, win = 0 }))
+    local win = api.nvim_get_current_win()
+    -- Can move cursor to recently opened window and window is flushed #28868
+    feed(':echo getchar()<CR>')
+    local newwin = api.nvim_open_win(0, false, {
+      relative = 'editor',
+      width = 1,
+      height = 1,
+      row = 1,
+      col = 10,
+    })
+    api.nvim__redraw({ win = newwin, cursor = true })
+    screen:expect({
+      grid = [[
+                                                                    |
+        {1:~         }{4:^ }{1:                                                 }|
+        {1:~                                                           }|*2
+        :echo getchar()                                             |
+      ]],
+    })
+    fn.setline(1, 'foobar')
+    command('vnew')
+    fn.setline(1, 'foobaz')
+    -- Can flush pending screen updates
+    api.nvim__redraw({ flush = true })
+    screen:expect({
+      grid = [[
+        foobaz                        │foobar                       |
+        {1:~         }{4:^f}{1:                   }│{1:~                            }|
+        {1:~                             }│{1:~                            }|
+        {3:[No Name] [+]                  }{2:[No Name] [+]                }|
+        :echo getchar()                                             |
+      ]],
+    })
+    api.nvim_win_close(newwin, true)
+    -- Can update the grid cursor position #20793
+    api.nvim__redraw({ cursor = true })
+    screen:expect({
+      grid = [[
+        ^foobaz                        │foobar                       |
+        {1:~                             }│{1:~                            }|*2
+        {3:[No Name] [+]                  }{2:[No Name] [+]                }|
+        :echo getchar()                                             |
+      ]],
+    })
+    -- Also in non-current window
+    api.nvim__redraw({ cursor = true, win = win })
+    screen:expect({
+      grid = [[
+        foobaz                        │^foobar                       |
+        {1:~                             }│{1:~                            }|*2
+        {3:[No Name] [+]                  }{2:[No Name] [+]                }|
+        :echo getchar()                                             |
+      ]],
+    })
+    -- Can update the 'statusline' in a single window
+    api.nvim_set_option_value('statusline', 'statusline1', { win = 0 })
+    api.nvim_set_option_value('statusline', 'statusline2', { win = win })
+    api.nvim__redraw({ cursor = true, win = 0, statusline = true })
+    screen:expect({
+      grid = [[
+        ^foobaz                        │foobar                       |
+        {1:~                             }│{1:~                            }|*2
+        {3:statusline1                    }{2:[No Name] [+]                }|
+        :echo getchar()                                             |
+      ]],
+    })
+    api.nvim__redraw({ win = win, statusline = true })
+    screen:expect({
+      grid = [[
+        ^foobaz                        │foobar                       |
+        {1:~                             }│{1:~                            }|*2
+        {3:statusline1                    }{2:statusline2                  }|
+        :echo getchar()                                             |
+      ]],
+    })
+    -- Can update the 'statusline' in all windows
+    api.nvim_set_option_value('statusline', '', { win = win })
+    api.nvim_set_option_value('statusline', 'statusline3', {})
+    api.nvim__redraw({ statusline = true })
+    screen:expect({
+      grid = [[
+        ^foobaz                        │foobar                       |
+        {1:~                             }│{1:~                            }|*2
+        {3:statusline3                    }{2:statusline3                  }|
+        :echo getchar()                                             |
+      ]],
+    })
+    -- Can update the 'statuscolumn'
+    api.nvim_set_option_value('statuscolumn', 'statuscolumn', { win = win })
+    api.nvim__redraw({ statuscolumn = true })
+    screen:expect({
+      grid = [[
+        ^foobaz                        │{8:statuscolumn}foobar           |
+        {1:~                             }│{1:~                            }|*2
+        {3:statusline3                    }{2:statusline3                  }|
+        :echo getchar()                                             |
+      ]],
+    })
+    -- Can update the 'winbar'
+    api.nvim_set_option_value('winbar', 'winbar', { win = 0 })
+    api.nvim__redraw({ win = 0, winbar = true })
+    screen:expect({
+      grid = [[
+        {5:^winbar                        }│{8:statuscolumn}foobar           |
+        foobaz                        │{1:~                            }|
+        {1:~                             }│{1:~                            }|
+        {3:statusline3                    }{2:statusline3                  }|
+        :echo getchar()                                             |
+      ]],
+    })
+    -- Can update the 'tabline'
+    api.nvim_set_option_value('showtabline', 2, {})
+    api.nvim_set_option_value('tabline', 'tabline', {})
+    api.nvim__redraw({ tabline = true })
+    screen:expect({
+      grid = [[
+        {2:^tabline                                                     }|
+        {5:winbar                        }│{8:statuscolumn}foobar           |
+        foobaz                        │{1:~                            }|
+        {3:statusline3                    }{2:statusline3                  }|
+        :echo getchar()                                             |
+      ]],
+    })
+    -- Can update multiple status widgets
+    api.nvim_set_option_value('tabline', 'tabline2', {})
+    api.nvim_set_option_value('statusline', 'statusline4', {})
+    api.nvim__redraw({ statusline = true, tabline = true })
+    screen:expect({
+      grid = [[
+        {2:^tabline2                                                    }|
+        {5:winbar                        }│{8:statuscolumn}foobar           |
+        foobaz                        │{1:~                            }|
+        {3:statusline4                    }{2:statusline4                  }|
+        :echo getchar()                                             |
+      ]],
+    })
+    -- Can update all status widgets
+    api.nvim_set_option_value('tabline', 'tabline3', {})
+    api.nvim_set_option_value('statusline', 'statusline5', {})
+    api.nvim_set_option_value('statuscolumn', 'statuscolumn2', {})
+    api.nvim_set_option_value('winbar', 'winbar2', {})
+    api.nvim__redraw({ statuscolumn = true, statusline = true, tabline = true, winbar = true })
+    screen:expect({
+      grid = [[
+        {2:^tabline3                                                    }|
+        {5:winbar2                       }│{5:winbar2                      }|
+        {8:statuscolumn2}foobaz           │{8:statuscolumn}foobar           |
+        {3:statusline5                    }{2:statusline5                  }|
+        :echo getchar()                                             |
+      ]],
+    })
+    -- Can update status widget for a specific window
+    feed('<CR><CR>')
+    command('let g:status=0')
+    api.nvim_set_option_value('statusline', '%{%g:status%}', { win = 0 })
+    command('vsplit')
+    screen:expect({
+      grid = [[
+        {2:tabline3                                                    }|
+        {5:winbar2             }│{5:winbar2            }│{5:winbar2            }|
+        {8:statuscolumn2}^foobaz │{8:statuscolumn2}foobaz│{8:statuscolumn}foobar |
+        {3:0                    }{2:0                   statusline5        }|
+        13                                                          |
+      ]],
+    })
+    command('let g:status=1')
+    api.nvim__redraw({ win = 0, statusline = true })
+    screen:expect({
+      grid = [[
+        {2:tabline3                                                    }|
+        {5:winbar2             }│{5:winbar2            }│{5:winbar2            }|
+        {8:statuscolumn2}^foobaz │{8:statuscolumn2}foobaz│{8:statuscolumn}foobar |
+        {3:1                    }{2:0                   statusline5        }|
+        13                                                          |
+      ]],
+    })
+    -- Can update status widget for a specific buffer
+    command('let g:status=2')
+    api.nvim__redraw({ buf = 0, statusline = true })
+    screen:expect({
+      grid = [[
+        {2:tabline3                                                    }|
+        {5:winbar2             }│{5:winbar2            }│{5:winbar2            }|
+        {8:statuscolumn2}^foobaz │{8:statuscolumn2}foobaz│{8:statuscolumn}foobar |
+        {3:2                    }{2:2                   statusline5        }|
+        13                                                          |
+      ]],
+    })
+    -- valid = true does not draw any lines on its own
+    exec_lua([[
+      _G.lines = 0
+      ns = vim.api.nvim_create_namespace('')
+      vim.api.nvim_set_decoration_provider(ns, {
+        on_win = function()
+          if _G.do_win then
+            vim.api.nvim_buf_set_extmark(0, ns, 0, 0, { hl_group = 'IncSearch', end_col = 6 })
+          end
+        end,
+        on_line = function()
+          _G.lines = _G.lines + 1
+        end,
+      })
+    ]])
+    local lines = exec_lua('return lines')
+    api.nvim__redraw({ buf = 0, valid = true, flush = true })
+    eq(lines, exec_lua('return _G.lines'))
+    -- valid = false does
+    api.nvim__redraw({ buf = 0, valid = false, flush = true })
+    neq(lines, exec_lua('return _G.lines'))
+    -- valid = true does redraw lines if affected by on_win callback
+    exec_lua('_G.do_win = true')
+    api.nvim__redraw({ buf = 0, valid = true, flush = true })
+    screen:expect({
+      grid = [[
+        {2:tabline3                                                    }|
+        {5:winbar2             }│{5:winbar2            }│{5:winbar2            }|
+        {8:statuscolumn2}{2:^foobaz} │{8:statuscolumn2}{2:foobaz}│{8:statuscolumn}foobar |
+        {3:2                    }{2:2                   statusline5        }|
+        13                                                          |
+      ]],
+    })
+    -- takes buffer line count from correct buffer with "win" and {0, -1} "range"
+    api.nvim__redraw({ win = 0, range = { 0, -1 } })
+    n.assert_alive()
   end)
 end)

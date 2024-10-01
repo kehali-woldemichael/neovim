@@ -53,7 +53,7 @@ local str_utf_end = vim.str_utf_end
 ---@param line string the line to index into
 ---@param byte integer the byte idx
 ---@param offset_encoding string utf-8|utf-16|utf-32|nil (default: utf-8)
---@returns integer the utf idx for the given encoding
+---@return integer utf_idx for the given encoding
 local function byte_to_utf(line, byte, offset_encoding)
   -- convert to 0 based indexing for str_utfindex
   byte = byte - 1
@@ -204,7 +204,7 @@ end
 --- Normalized to the next codepoint.
 --- prev_end_range is the text range sent to the server representing the changed region.
 --- curr_end_range is the text that should be collected and sent to the server.
---
+---
 ---@param prev_lines string[] list of lines
 ---@param curr_lines string[] list of lines
 ---@param start_range vim.lsp.sync.Range
@@ -212,7 +212,8 @@ end
 ---@param lastline integer
 ---@param new_lastline integer
 ---@param offset_encoding string
----@return vim.lsp.sync.Range, vim.lsp.sync.Range
+---@return vim.lsp.sync.Range prev_end_range
+---@return vim.lsp.sync.Range curr_end_range
 local function compute_end_range(
   prev_lines,
   curr_lines,
@@ -222,6 +223,16 @@ local function compute_end_range(
   new_lastline,
   offset_encoding
 )
+  -- A special case for the following `firstline == new_lastline` case where lines are deleted.
+  -- Even if the buffer has become empty, nvim behaves as if it has an empty line with eol.
+  if #curr_lines == 1 and curr_lines[1] == '' then
+    local prev_line = prev_lines[lastline - 1]
+    return {
+      line_idx = lastline - 1,
+      byte_idx = #prev_line + 1,
+      char_idx = compute_line_length(prev_line, offset_encoding) + 1,
+    }, { line_idx = 1, byte_idx = 1, char_idx = 1 }
+  end
   -- If firstline == new_lastline, the first change occurred on a line that was deleted.
   -- In this case, the last_byte...
   if firstline == new_lastline then

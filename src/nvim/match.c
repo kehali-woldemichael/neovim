@@ -10,6 +10,7 @@
 #include "nvim/buffer_defs.h"
 #include "nvim/charset.h"
 #include "nvim/drawscreen.h"
+#include "nvim/errors.h"
 #include "nvim/eval/funcs.h"
 #include "nvim/eval/typval.h"
 #include "nvim/eval/window.h"
@@ -100,7 +101,7 @@ static int match_add(win_T *wp, const char *const grp, const char *const pat, in
 
   // Build new match.
   matchitem_T *m = xcalloc(1, sizeof(matchitem_T));
-  if (pos_list != NULL) {
+  if (tv_list_len(pos_list) > 0) {
     m->mit_pos_array = xcalloc((size_t)tv_list_len(pos_list), sizeof(llpos_T));
     m->mit_pos_count = tv_list_len(pos_list);
   }
@@ -533,7 +534,7 @@ void prepare_search_hl(win_T *wp, match_T *search_hl, linenr_T lnum)
         for (shl->first_lnum = lnum;
              shl->first_lnum > wp->w_topline;
              shl->first_lnum--) {
-          if (hasFoldingWin(wp, shl->first_lnum - 1, NULL, NULL, true, NULL)) {
+          if (hasFolding(wp, shl->first_lnum - 1, NULL, NULL)) {
             break;
           }
         }
@@ -705,6 +706,9 @@ int update_search_hl(win_T *wp, linenr_T lnum, colnr_T col, char **line, match_T
         // group.
         if (shl == search_hl && shl->has_cursor) {
           shl->attr_cur = win_hl_attr(wp, HLF_LC);
+          if (shl->attr_cur != shl->attr) {
+            search_hl_has_cursor_lnum = lnum;
+          }
         } else {
           shl->attr_cur = shl->attr;
         }
@@ -1103,7 +1107,7 @@ void f_matchaddpos(typval_T *argvars, typval_T *rettv, EvalFuncData fptr)
 
   list_T *l;
   l = argvars[1].vval.v_list;
-  if (l == NULL) {
+  if (tv_list_len(l) == 0) {
     return;
   }
 

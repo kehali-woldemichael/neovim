@@ -11,6 +11,7 @@
 #include "nvim/ascii_defs.h"
 #include "nvim/charset.h"
 #include "nvim/debugger.h"
+#include "nvim/errors.h"
 #include "nvim/eval.h"
 #include "nvim/eval/typval.h"
 #include "nvim/eval/typval_defs.h"
@@ -405,7 +406,7 @@ char *get_exception_string(void *value, except_type_T type, char *cmdname, bool 
                           || (ascii_isdigit(p[3])
                               && p[4] == ':')))))) {
         if (*p == NUL || p == mesg) {
-          STRCAT(val, mesg);  // 'E123' missing or at beginning
+          strcat(val, mesg);  // 'E123' missing or at beginning
         } else {
           // '"filename" E123: message text'
           if (mesg[0] != '"' || p - 2 < &mesg[1]
@@ -414,7 +415,7 @@ char *get_exception_string(void *value, except_type_T type, char *cmdname, bool 
             continue;
           }
 
-          STRCAT(val, p);
+          strcat(val, p);
           p[-2] = NUL;
           snprintf(val + strlen(p), strlen(" (%s)"), " (%s)", &mesg[1]);
           p[-2] = '"';
@@ -848,7 +849,7 @@ void ex_if(exarg_T *eap)
     bool skip = CHECK_SKIP;
 
     bool error;
-    bool result = eval_to_bool(eap->arg, &error, eap, skip);
+    bool result = eval_to_bool(eap->arg, &error, eap, skip, false);
 
     if (!skip && !error) {
       if (result) {
@@ -943,7 +944,7 @@ void ex_else(exarg_T *eap)
     if (skip && *eap->arg != '"' && ends_excmd(*eap->arg)) {
       semsg(_(e_invexpr2), eap->arg);
     } else {
-      result = eval_to_bool(eap->arg, &error, eap, skip);
+      result = eval_to_bool(eap->arg, &error, eap, skip, false);
     }
 
     // When throwing error exceptions, we want to throw always the first
@@ -989,7 +990,7 @@ void ex_while(exarg_T *eap)
 
     int skip = CHECK_SKIP;
     if (eap->cmdidx == CMD_while) {  // ":while bool-expr"
-      result = eval_to_bool(eap->arg, &error, eap, skip);
+      result = eval_to_bool(eap->arg, &error, eap, skip, false);
     } else {  // ":for var in list-expr"
       evalarg_T evalarg;
       fill_evalarg_from_eap(&evalarg, eap, skip);

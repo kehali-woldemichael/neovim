@@ -2,15 +2,18 @@ local mpack = vim.mpack
 
 local hashy = require 'generators.hashy'
 
-assert(#arg >= 5)
+local pre_args = 7
+assert(#arg >= pre_args)
 -- output h file with generated dispatch functions (dispatch_wrappers.generated.h)
 local dispatch_outputf = arg[1]
--- output h file with packed metadata (funcs_metadata.generated.h)
-local funcs_metadata_outputf = arg[2]
+-- output h file with packed metadata (api_metadata.generated.h)
+local api_metadata_outputf = arg[2]
 -- output metadata mpack file, for use by other build scripts (api_metadata.mpack)
 local mpack_outputf = arg[3]
 local lua_c_bindings_outputf = arg[4] -- lua_api_c_bindings.generated.c
 local keysets_outputf = arg[5] -- keysets_defs.generated.h
+local ui_metadata_inputf = arg[6] -- ui events metadata
+local git_version_inputf = arg[7] -- git version header
 
 local functions = {}
 
@@ -23,9 +26,7 @@ local function_names = {}
 
 local c_grammar = require('generators.c_grammar')
 
-local function startswith(String, Start)
-  return string.sub(String, 1, string.len(Start)) == Start
-end
+local startswith = vim.startswith
 
 local function add_function(fn)
   local public = startswith(fn.name, 'nvim_') or fn.deprecated_since
@@ -60,8 +61,7 @@ local function add_function(fn)
       fn.parameters[#fn.parameters] = nil
     end
     if #fn.parameters ~= 0 and fn.parameters[#fn.parameters][1] == 'arena' then
-      -- return value is allocated in an arena
-      fn.arena_return = true
+      fn.receives_arena = true
       fn.parameters[#fn.parameters] = nil
     end
   end
@@ -72,14 +72,19 @@ local keysets = {}
 local function add_keyset(val)
   local keys = {}
   local types = {}
+  local c_names = {}
   local is_set_name = 'is_set__' .. val.keyset_name .. '_'
   local has_optional = false
   for i, field in ipairs(val.fields) do
+    local dict_key = field.dict_key or field.name
     if field.type ~= 'Object' then
-      types[field.name] = field.type
+      types[dict_key] = field.type
     end
     if field.name ~= is_set_name and field.type ~= 'OptionalKeys' then
-      table.insert(keys, field.name)
+      table.insert(keys, dict_key)
+      if dict_key ~= field.name then
+        c_names[dict_key] = field.name
+      end
     else
       if i > 1 then
         error("'is_set__{type}_' must be first if present")
@@ -94,13 +99,16 @@ local function add_keyset(val)
   table.insert(keysets, {
     name = val.keyset_name,
     keys = keys,
+    c_names = c_names,
     types = types,
     has_optional = has_optional,
   })
 end
 
+local ui_options_text = nil
+
 -- read each input file, parse and append to the api metadata
-for i = 6, #arg do
+for i = pre_args + 1, #arg do
   local full_path = arg[i]
   local parts = {}
   for part in string.gmatch(full_path, '[^/]+') do
@@ -110,15 +118,18 @@ for i = 6, #arg do
 
   local input = assert(io.open(full_path, 'rb'))
 
-  local tmp = c_grammar.grammar:match(input:read('*all'))
+  local text = input:read('*all')
+  local tmp = c_grammar.grammar:match(text)
   for j = 1, #tmp do
     local val = tmp[j]
     if val.keyset_name then
       add_keyset(val)
-    else
+    elseif val.name then
       add_function(val)
     end
   end
+
+  ui_options_text = ui_options_text or string.match(text, 'ui_ext_names%[][^{]+{([^}]+)}')
   input:close()
 end
 
@@ -205,27 +216,89 @@ for _, f in ipairs(functions) do
     end
     f_exported.parameters = {}
     for i, param in ipairs(f.parameters) do
-      if param[1] == 'DictionaryOf(LuaRef)' then
-        param = { 'Dictionary', param[2] }
+      if param[1] == 'DictOf(LuaRef)' then
+        param = { 'Dict', param[2] }
       elseif startswith(param[1], 'Dict(') then
-        param = { 'Dictionary', param[2] }
+        param = { 'Dict', param[2] }
       end
       f_exported.parameters[i] = param
     end
     if startswith(f.return_type, 'Dict(') then
-      f_exported.return_type = 'Dictionary'
+      f_exported.return_type = 'Dict'
     end
     exported_functions[#exported_functions + 1] = f_exported
   end
 end
 
+local ui_options = { 'rgb' }
+for x in string.gmatch(ui_options_text, '"([a-z][a-z_]+)"') do
+  table.insert(ui_options, x)
+end
+
+local version = require 'nvim_version'
+local git_version = io.open(git_version_inputf):read '*a'
+local version_build = string.match(git_version, '#define NVIM_VERSION_BUILD "([^"]+)"') or vim.NIL
+
 -- serialize the API metadata using msgpack and embed into the resulting
 -- binary for easy querying by clients
-local funcs_metadata_output = assert(io.open(funcs_metadata_outputf, 'wb'))
-local packed = mpack.encode(exported_functions)
+local api_metadata_output = assert(io.open(api_metadata_outputf, 'wb'))
+local pieces = {}
+
+-- Naively using mpack.encode({foo=x, bar=y}) will make the build
+-- "non-reproducible". Emit maps directly as FIXDICT(2) "foo" x "bar" y instead
+local function fixdict(num)
+  if num > 15 then
+    error 'implement more dict codes'
+  end
+  table.insert(pieces, string.char(128 + num))
+end
+local function put(item, item2)
+  table.insert(pieces, mpack.encode(item))
+  if item2 ~= nil then
+    table.insert(pieces, mpack.encode(item2))
+  end
+end
+
+fixdict(6)
+
+put('version')
+fixdict(1 + #version)
+for _, item in ipairs(version) do
+  -- NB: all items are mandatory. But any error will be less confusing
+  -- with placeholder vim.NIL (than invalid mpack data)
+  local val = item[2]
+  if val == nil then
+    val = vim.NIL
+  end
+  put(item[1], val)
+end
+put('build', version_build)
+
+put('functions', exported_functions)
+put('ui_events')
+table.insert(pieces, io.open(ui_metadata_inputf, 'rb'):read('*all'))
+put('ui_options', ui_options)
+
+put('error_types')
+fixdict(2)
+put('Exception', { id = 0 })
+put('Validation', { id = 1 })
+
+put('types')
+local types =
+  { { 'Buffer', 'nvim_buf_' }, { 'Window', 'nvim_win_' }, { 'Tabpage', 'nvim_tabpage_' } }
+fixdict(#types)
+for i, item in ipairs(types) do
+  put(item[1])
+  fixdict(2)
+  put('id', i - 1)
+  put('prefix', item[2])
+end
+
+local packed = table.concat(pieces)
 local dump_bin_array = require('generators.dump_bin_array')
-dump_bin_array(funcs_metadata_output, 'funcs_metadata', packed)
-funcs_metadata_output:close()
+dump_bin_array(api_metadata_output, 'packed_api_metadata', packed)
+api_metadata_output:close()
 
 -- start building the dispatch wrapper output
 local output = assert(io.open(dispatch_outputf, 'wb'))
@@ -239,12 +312,12 @@ local keysets_defs = assert(io.open(keysets_outputf, 'wb'))
 --  so that the dispatcher can find the C functions that you are creating!
 -- ===========================================================================
 output:write([[
+#include "nvim/errors.h"
 #include "nvim/ex_docmd.h"
 #include "nvim/ex_getln.h"
 #include "nvim/globals.h"
 #include "nvim/log.h"
 #include "nvim/map_defs.h"
-#include "nvim/msgpack_rpc/helpers.h"
 
 #include "nvim/api/autocmd.h"
 #include "nvim/api/buffer.h"
@@ -265,19 +338,6 @@ output:write([[
 keysets_defs:write('// IWYU pragma: private, include "nvim/api/private/dispatch.h"\n\n')
 
 for _, k in ipairs(keysets) do
-  local c_name = {}
-
-  for i = 1, #k.keys do
-    -- some keys, like "register" are c keywords and get
-    -- escaped with a trailing _ in the struct.
-    if vim.endswith(k.keys[i], '_') then
-      local orig = k.keys[i]
-      k.keys[i] = string.sub(k.keys[i], 1, #k.keys[i] - 1)
-      c_name[k.keys[i]] = orig
-      k.types[k.keys[i]] = k.types[orig]
-    end
-  end
-
   local neworder, hashfun = hashy.hashy_hash(k.name, k.keys, function(idx)
     return k.name .. '_table[' .. idx .. '].str'
   end)
@@ -287,6 +347,8 @@ for _, k in ipairs(keysets) do
   local function typename(type)
     if type == 'HLGroupID' then
       return 'kObjectTypeInteger'
+    elseif type == 'StringArray' then
+      return 'kUnpackTypeStringArray'
     elseif type ~= nil then
       return 'kObjectType' .. type
     else
@@ -307,7 +369,7 @@ for _, k in ipairs(keysets) do
         .. '", offsetof(KeyDict_'
         .. k.name
         .. ', '
-        .. (c_name[key] or key)
+        .. (k.c_names[key] or key)
         .. '), '
         .. typename(k.types[key])
         .. ', '
@@ -344,7 +406,7 @@ local function real_type(type)
     if rv:match('Array') then
       rv = 'Array'
     else
-      rv = 'Dictionary'
+      rv = 'Dict'
     end
   end
   return rv
@@ -404,7 +466,7 @@ for i = 1, #functions do
         output:write('\n  ' .. converted .. ' = args.items[' .. (j - 1) .. '];\n')
       elseif rt:match('^KeyDict_') then
         converted = '&' .. converted
-        output:write('\n  if (args.items[' .. (j - 1) .. '].type == kObjectTypeDictionary) {') --luacheck: ignore 631
+        output:write('\n  if (args.items[' .. (j - 1) .. '].type == kObjectTypeDict) {') --luacheck: ignore 631
         output:write('\n    memset(' .. converted .. ', 0, sizeof(*' .. converted .. '));') -- TODO: neeeee
         output:write(
           '\n    if (!api_dict_to_keydict('
@@ -413,7 +475,7 @@ for i = 1, #functions do
             .. rt
             .. '_get_field, args.items['
             .. (j - 1)
-            .. '].data.dictionary, error)) {'
+            .. '].data.dict, error)) {'
         )
         output:write('\n      goto cleanup;')
         output:write('\n    }')
@@ -492,7 +554,7 @@ for i = 1, #functions do
           )
         end
         -- accept empty lua tables as empty dictionaries
-        if rt:match('^Dictionary') then
+        if rt:match('^Dict') then
           output:write(
             '\n  } else if (args.items['
               .. (j - 1)
@@ -500,7 +562,7 @@ for i = 1, #functions do
               .. (j - 1)
               .. '].data.array.size == 0) {'
           ) --luacheck: ignore 631
-          output:write('\n    ' .. converted .. ' = (Dictionary)ARRAY_DICT_INIT;')
+          output:write('\n    ' .. converted .. ' = (Dict)ARRAY_DICT_INIT;')
         end
         output:write('\n  } else {')
         output:write(
@@ -554,7 +616,7 @@ for i = 1, #functions do
       table.insert(call_args, a)
     end
 
-    if fn.arena_return then
+    if fn.receives_arena then
       table.insert(call_args, 'arena')
     end
 
@@ -581,7 +643,7 @@ for i = 1, #functions do
     if string.match(ret_type, '^KeyDict_') then
       local table = string.sub(ret_type, 9) .. '_table'
       output:write(
-        '\n  ret = DICTIONARY_OBJ(api_keydict_to_dict(&rv, '
+        '\n  ret = DICT_OBJ(api_keydict_to_dict(&rv, '
           .. table
           .. ', ARRAY_SIZE('
           .. table
@@ -621,8 +683,8 @@ for n, name in ipairs(hashorder) do
       .. (fn.impl_name or fn.name)
       .. ', .fast = '
       .. tostring(fn.fast)
-      .. ', .arena_return = '
-      .. tostring(not not fn.arena_return)
+      .. ', .ret_alloc = '
+      .. tostring(not not fn.ret_alloc)
       .. '},\n'
   )
 end
@@ -654,23 +716,6 @@ end
 -- start building lua output
 output = assert(io.open(lua_c_bindings_outputf, 'wb'))
 
-output:write([[
-#include <lua.h>
-#include <lualib.h>
-#include <lauxlib.h>
-
-#include "nvim/ex_docmd.h"
-#include "nvim/ex_getln.h"
-#include "nvim/func_attr.h"
-#include "nvim/globals.h"
-#include "nvim/api/private/defs.h"
-#include "nvim/api/private/helpers.h"
-#include "nvim/api/private/dispatch.h"
-#include "nvim/lua/converter.h"
-#include "nvim/lua/executor.h"
-#include "nvim/memory.h"
-
-]])
 include_headers(output, headers)
 output:write('\n')
 
@@ -734,12 +779,12 @@ local function process_function(fn)
     local param = fn.parameters[j]
     local cparam = string.format('arg%u', j)
     local param_type = real_type(param[1])
-    local extra = param_type == 'Dictionary' and 'false, ' or ''
+    local extra = param_type == 'Dict' and 'false, ' or ''
     local arg_free_code = ''
     if param[1] == 'Object' then
       extra = 'true, '
       arg_free_code = 'api_luarefs_free_object(' .. cparam .. ');'
-    elseif param[1] == 'DictionaryOf(LuaRef)' then
+    elseif param[1] == 'DictOf(LuaRef)' then
       extra = 'true, '
       arg_free_code = 'api_luarefs_free_dict(' .. cparam .. ');'
     elseif param[1] == 'LuaRef' then
@@ -791,7 +836,7 @@ local function process_function(fn)
   if fn.receives_channel_id then
     cparams = 'LUA_INTERNAL_CALL, ' .. cparams
   end
-  if fn.arena_return then
+  if fn.receives_arena then
     cparams = cparams .. '&arena, '
   end
 
@@ -839,7 +884,7 @@ exit_0:
       return_type = fn.return_type
     end
     local free_retval = ''
-    if not fn.arena_return then
+    if fn.ret_alloc then
       free_retval = '  api_free_' .. return_type:lower() .. '(ret);'
     end
     write_shifted_output('    %s ret = %s(%s);\n', fn.return_type, fn.name, cparams)
@@ -851,7 +896,7 @@ exit_0:
       write_shifted_output(string.format(
         [[
     if (lua_gettop(lstate) == 0) {
-      nlua_push_%s(lstate, %sret, true);
+      nlua_push_%s(lstate, %sret, kNluaPushSpecial | kNluaPushFreeRefs);
     }
       ]],
         return_type,
@@ -865,10 +910,10 @@ exit_0:
     else
       local special = (fn.since ~= nil and fn.since < 11)
       write_shifted_output(
-        '    nlua_push_%s(lstate, %sret, %s);\n',
+        '    nlua_push_%s(lstate, %sret, %s | kNluaPushFreeRefs);\n',
         return_type,
         ret_mode,
-        tostring(special)
+        special and 'kNluaPushSpecial' or '0'
       )
     end
 
@@ -912,8 +957,6 @@ end
 
 output:write(string.format(
   [[
-void nlua_add_api_functions(lua_State *lstate)
-  REAL_FATTR_NONNULL_ALL;
 void nlua_add_api_functions(lua_State *lstate)
 {
   lua_createtable(lstate, 0, %u);

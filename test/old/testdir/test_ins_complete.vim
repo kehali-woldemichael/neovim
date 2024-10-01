@@ -108,6 +108,19 @@ func Test_ins_complete()
   call delete('Xdir', 'rf')
 endfunc
 
+func Test_ins_complete_invalid_byte()
+  if has('unix') && executable('base64')
+    " this weird command was causing an illegal memory access
+    call writefile(['bm9ybTlvMDCAMM4Dbw4OGA4ODg=='], 'Xinvalid64')
+    call system('base64 -d Xinvalid64 > Xinvalid')
+    call writefile(['qa!'], 'Xexit')
+    call RunVim([], [], " -i NONE -n -X -Z -e -m -s -S Xinvalid -S Xexit")
+    call delete('Xinvalid64')
+    call delete('Xinvalid')
+    call delete('Xexit')
+  endif
+endfunc
+
 func Test_omni_dash()
   func Omni(findstart, base)
     if a:findstart
@@ -375,6 +388,62 @@ func Test_completefunc_info()
   set completefunc&
 endfunc
 
+func CompleteInfoUserDefinedFn(findstart, query)
+  " User defined function (i_CTRL-X_CTRL-U)
+  if a:findstart
+    return col('.')
+  endif
+  return [{'word': 'foo'}, {'word': 'bar'}, {'word': 'baz'}, {'word': 'qux'}]
+endfunc
+
+func CompleteInfoTestUserDefinedFn(mvmt, idx, noselect)
+  new
+  if a:noselect
+    set completeopt=menuone,popup,noinsert,noselect
+  else
+    set completeopt=menu,preview
+  endif
+  set completefunc=CompleteInfoUserDefinedFn
+  call feedkeys("i\<C-X>\<C-U>" . a:mvmt . "\<C-R>\<C-R>=string(complete_info())\<CR>\<ESC>", "tx")
+  let completed = a:idx != -1 ? ['foo', 'bar', 'baz', 'qux']->get(a:idx) : ''
+  call assert_equal(completed. "{'pum_visible': 1, 'mode': 'function', 'selected': " . a:idx . ", 'items': [" .
+        \ "{'word': 'foo', 'menu': '', 'user_data': '', 'info': '', 'kind': '', 'abbr': ''}, " .
+        \ "{'word': 'bar', 'menu': '', 'user_data': '', 'info': '', 'kind': '', 'abbr': ''}, " .
+        \ "{'word': 'baz', 'menu': '', 'user_data': '', 'info': '', 'kind': '', 'abbr': ''}, " .
+        \ "{'word': 'qux', 'menu': '', 'user_data': '', 'info': '', 'kind': '', 'abbr': ''}" .
+        \ "]}", getline(1))
+  bwipe!
+  set completeopt&
+  set completefunc&
+endfunc
+
+func Test_complete_info_user_defined_fn()
+  " forward
+  call CompleteInfoTestUserDefinedFn("\<C-N>\<C-N>", 1, v:true)
+  call CompleteInfoTestUserDefinedFn("\<C-N>\<C-N>\<C-N>", 2, v:true)
+  call CompleteInfoTestUserDefinedFn("\<C-N>\<C-N>", 2, v:false)
+  call CompleteInfoTestUserDefinedFn("\<C-N>\<C-N>\<C-N>", 3, v:false)
+  call CompleteInfoTestUserDefinedFn("\<C-N>\<C-N>\<C-N>\<C-N>", -1, v:false)
+  " backward
+  call CompleteInfoTestUserDefinedFn("\<C-P>\<C-P>", 2, v:true)
+  call CompleteInfoTestUserDefinedFn("\<C-P>\<C-P>\<C-P>", 1, v:true)
+  call CompleteInfoTestUserDefinedFn("\<C-P>\<C-P>\<C-P>\<C-P>\<C-P>", -1, v:true)
+  call CompleteInfoTestUserDefinedFn("\<C-P>\<C-P>", 3, v:false)
+  call CompleteInfoTestUserDefinedFn("\<C-P>\<C-P>\<C-P>", 2, v:false)
+  " forward backward
+  call CompleteInfoTestUserDefinedFn("\<C-N>\<C-N>\<C-N>\<C-P>", 1, v:true)
+  call CompleteInfoTestUserDefinedFn("\<C-N>\<C-N>\<C-P>", 0, v:true)
+  call CompleteInfoTestUserDefinedFn("\<C-N>\<C-N>\<C-N>\<C-P>", 2, v:false)
+  call CompleteInfoTestUserDefinedFn("\<C-N>\<C-N>\<C-N>\<C-N>\<C-P>", 3, v:false)
+  call CompleteInfoTestUserDefinedFn("\<C-N>\<C-N>\<C-P>", 1, v:false)
+  " backward forward
+  call CompleteInfoTestUserDefinedFn("\<C-P>\<C-P>\<C-P>\<C-P>\<C-P>\<C-N>", 0, v:true)
+  call CompleteInfoTestUserDefinedFn("\<C-P>\<C-P>\<C-P>\<C-N>", 2, v:true)
+  call CompleteInfoTestUserDefinedFn("\<C-P>\<C-P>\<C-P>\<C-P>\<C-P>\<C-N>", 1, v:false)
+  call CompleteInfoTestUserDefinedFn("\<C-P>\<C-P>\<C-P>\<C-N>", 3, v:false)
+  call CompleteInfoTestUserDefinedFn("\<C-P>\<C-N>\<C-N>", 1, v:false)
+endfunc
+
 " Test that mouse scrolling/movement should not interrupt completion.
 func Test_mouse_scroll_move_during_completion()
   new
@@ -631,14 +700,14 @@ func Test_pum_with_preview_win()
   CheckScreendump
 
   let lines =<< trim END
-      funct Omni_test(findstart, base)
-	if a:findstart
-	  return col(".") - 1
-	endif
-	return [#{word: "one", info: "1info"}, #{word: "two", info: "2info"}, #{word: "three", info: "3info"}]
-      endfunc
-      set omnifunc=Omni_test
-      set completeopt+=longest
+    funct Omni_test(findstart, base)
+      if a:findstart
+        return col(".") - 1
+      endif
+      return [#{word: "one", info: "1info"}, #{word: "two", info: "2info"}, #{word: "three", info: "3info"}]
+    endfunc
+    set omnifunc=Omni_test
+    set completeopt+=longest
   END
 
   call writefile(lines, 'Xpreviewscript')
@@ -815,6 +884,74 @@ func Test_complete_with_longest()
   bwipe!
 endfunc
 
+" Test for buffer-local value of 'completeopt'
+func Test_completeopt_buffer_local()
+  set completeopt=menu
+  new
+  call setline(1, ['foofoo', 'foobar', 'foobaz', ''])
+  call assert_equal('', &l:completeopt)
+  call assert_equal('menu', &completeopt)
+  call assert_equal('menu', &g:completeopt)
+
+  setlocal bufhidden=hide
+  enew
+  call setline(1, ['foofoo', 'foobar', 'foobaz', ''])
+  call assert_equal('', &l:completeopt)
+  call assert_equal('menu', &completeopt)
+  call assert_equal('menu', &g:completeopt)
+
+  setlocal completeopt+=fuzzy,noinsert
+  call assert_equal('menu,fuzzy,noinsert', &l:completeopt)
+  call assert_equal('menu,fuzzy,noinsert', &completeopt)
+  call assert_equal('menu', &g:completeopt)
+  call feedkeys("Gccf\<C-X>\<C-N>bz\<C-Y>", 'tnix')
+  call assert_equal('foobaz', getline('.'))
+
+  setlocal completeopt=
+  call assert_equal('', &l:completeopt)
+  call assert_equal('menu', &completeopt)
+  call assert_equal('menu', &g:completeopt)
+  call feedkeys("Gccf\<C-X>\<C-N>\<C-Y>", 'tnix')
+  call assert_equal('foofoo', getline('.'))
+
+  setlocal completeopt+=longest
+  call assert_equal('menu,longest', &l:completeopt)
+  call assert_equal('menu,longest', &completeopt)
+  call assert_equal('menu', &g:completeopt)
+  call feedkeys("Gccf\<C-X>\<C-N>\<C-X>\<C-Z>", 'tnix')
+  call assert_equal('foo', getline('.'))
+
+  setlocal bufhidden=hide
+  buffer #
+  call assert_equal('', &l:completeopt)
+  call assert_equal('menu', &completeopt)
+  call assert_equal('menu', &g:completeopt)
+  call feedkeys("Gccf\<C-X>\<C-N>\<C-Y>", 'tnix')
+  call assert_equal('foofoo', getline('.'))
+
+  setlocal completeopt+=fuzzy,noinsert
+  call assert_equal('menu,fuzzy,noinsert', &l:completeopt)
+  call assert_equal('menu,fuzzy,noinsert', &completeopt)
+  call assert_equal('menu', &g:completeopt)
+  call feedkeys("Gccf\<C-X>\<C-N>bz\<C-Y>", 'tnix')
+  call assert_equal('foobaz', getline('.'))
+
+  buffer #
+  call assert_equal('menu,longest', &l:completeopt)
+  call assert_equal('menu,longest', &completeopt)
+  call assert_equal('menu', &g:completeopt)
+  call feedkeys("Gccf\<C-X>\<C-N>\<C-X>\<C-Z>", 'tnix')
+  call assert_equal('foo', getline('.'))
+
+  setlocal bufhidden=wipe
+  buffer! #
+  bwipe!
+  call assert_equal('', &l:completeopt)
+  call assert_equal('menu', &completeopt)
+  call assert_equal('menu', &g:completeopt)
+
+  set completeopt&
+endfunc
 
 " Test for completing words following a completed word in a line
 func Test_complete_wrapscan()
@@ -1139,7 +1276,7 @@ func Test_complete_wholeline_unlistedbuf()
   edit Xfile1
   enew
   set complete=U
-  " completing from a unloaded buffer should fail
+  " completing from an unloaded buffer should fail
   exe "normal! ia\<C-X>\<C-L>\<C-P>"
   call assert_equal('a', getline(1))
   %d
@@ -1553,6 +1690,23 @@ func Test_completefunc_callback()
   call assert_equal([[1, ''], [0, 'script2']], g:CompleteFunc3Args)
   bw!
   delfunc s:CompleteFunc3
+
+  " In Vim9 script s: can be omitted
+  let lines =<< trim END
+      vim9script
+      var CompleteFunc4Args = []
+      def CompleteFunc4(findstart: bool, base: string): any
+        add(CompleteFunc4Args, [findstart, base])
+        return findstart ? 0 : []
+      enddef
+      set completefunc=CompleteFunc4
+      new
+      setline(1, 'script1')
+      feedkeys("A\<C-X>\<C-U>\<Esc>", 'x')
+      assert_equal([[1, ''], [0, 'script1']], CompleteFunc4Args)
+      bw!
+  END
+  call CheckScriptSuccess(lines)
 
   " invalid return value
   let &completefunc = {a -> 'abc'}
@@ -2245,7 +2399,7 @@ endfunc
 
 func Test_ins_complete_end_of_line()
   " this was reading past the end of the line
-  new  
+  new
   norm 8oý 
   sil! norm o
 
@@ -2393,7 +2547,7 @@ func Test_complete_info_index()
   call assert_equal(-1, g:compl_info['selected'])
 
   call feedkeys("Go\<C-X>\<C-N>\<C-P>\<F5>\<Esc>_dd", 'tx')
-  call assert_equal(0, g:compl_info['selected'])
+  call assert_equal(5, g:compl_info['selected'])
   call assert_equal(6 , len(g:compl_info['items']))
   call assert_equal("fff", g:compl_info['items'][g:compl_info['selected']]['word'])
   call feedkeys("Go\<C-X>\<C-N>\<C-N>\<C-N>\<C-N>\<C-N>\<C-N>\<C-N>\<C-N>\<C-N>\<F5>\<Esc>_dd", 'tx')
@@ -2419,6 +2573,135 @@ func Test_complete_changed_complete_info()
   let buf = RunVimInTerminal('-S Xsegfault', #{rows: 5})
   call WaitForAssert({-> assert_match('^ii', term_getline(buf, 1))}, 1000)
   call StopVimInTerminal(buf)
+endfunc
+
+func Test_completefunc_first_call_complete_add()
+  new
+
+  func Complete(findstart, base) abort
+    if a:findstart
+      let col = col('.')
+      call complete_add('#')
+      return col - 1
+    else
+      return []
+    endif
+  endfunc
+
+  set completeopt=longest completefunc=Complete
+  " This used to cause heap-buffer-overflow
+  call assert_fails('call feedkeys("ifoo#\<C-X>\<C-U>", "xt")', 'E840:')
+
+  delfunc Complete
+  set completeopt& completefunc&
+  bwipe!
+endfunc
+
+func Test_complete_fuzzy_match()
+  func OnPumChange()
+    let g:item = get(v:event, 'completed_item', {})
+    let g:word = get(g:item, 'word', v:null)
+  endfunction
+
+  augroup AAAAA_Group
+    au!
+    autocmd CompleteChanged * :call OnPumChange()
+  augroup END
+
+  func Omni_test(findstart, base)
+    if a:findstart
+      return col(".")
+    endif
+    return [#{word: "foo"}, #{word: "foobar"}, #{word: "fooBaz"}, #{word: "foobala"}]
+  endfunc
+
+  new
+  set omnifunc=Omni_test
+  set completeopt+=noinsert,fuzzy
+  call feedkeys("Gi\<C-x>\<C-o>", 'tx')
+  call assert_equal('foo', g:word)
+  call feedkeys("S\<C-x>\<C-o>fb", 'tx')
+  call assert_equal('fooBaz', g:word)
+  call feedkeys("S\<C-x>\<C-o>fa", 'tx')
+  call assert_equal('foobar', g:word)
+  " select next
+  call feedkeys("S\<C-x>\<C-o>fb\<C-n>", 'tx')
+  call assert_equal('foobar', g:word)
+  " can cyclically select next
+  call feedkeys("S\<C-x>\<C-o>fb\<C-n>\<C-n>\<C-n>", 'tx')
+  call assert_equal(v:null, g:word)
+  " select prev
+  call feedkeys("S\<C-x>\<C-o>fb\<C-p>", 'tx')
+  call assert_equal(v:null, g:word)
+  " can cyclically select prev
+  call feedkeys("S\<C-x>\<C-o>fb\<C-p>\<C-p>\<C-p>\<C-p>", 'tx')
+  call assert_equal('fooBaz', g:word)
+
+  func Comp()
+    call complete(col('.'), ["fooBaz", "foobar", "foobala"])
+    return ''
+  endfunc
+  call feedkeys("i\<C-R>=Comp()\<CR>", 'tx')
+  call assert_equal('fooBaz', g:word)
+
+  " respect noselect
+  set completeopt+=noselect
+  call feedkeys("S\<C-x>\<C-o>fb", 'tx')
+  call assert_equal(v:null, g:word)
+  call feedkeys("S\<C-x>\<C-o>fb\<C-n>", 'tx')
+  call assert_equal('fooBaz', g:word)
+
+  " avoid breaking default completion behavior
+  set completeopt=fuzzy,menu
+  call setline(1, ['hello help hero h'])
+  " Use "!" flag of feedkeys() so that ex_normal_busy is not set and
+  " ins_compl_check_keys() is not skipped.
+  " Add a "0" after the <Esc> to avoid waiting for an escape sequence.
+  call feedkeys("A\<C-X>\<C-N>\<Esc>0", 'tx!')
+  call assert_equal('hello help hero hello', getline('.'))
+  set completeopt+=noinsert
+  call setline(1, ['hello help hero h'])
+  call feedkeys("A\<C-X>\<C-N>\<Esc>0", 'tx!')
+  call assert_equal('hello help hero h', getline('.'))
+
+  " issue #15526
+  set completeopt=fuzzy,menuone,menu,noselect
+  call setline(1, ['Text', 'ToText', ''])
+  call cursor(2, 1)
+  call feedkeys("STe\<C-X>\<C-N>x\<CR>\<Esc>0", 'tx!')
+  call assert_equal('Tex', getline('.'))
+
+  " clean up
+  set omnifunc=
+  bw!
+  set complete& completeopt&
+  autocmd! AAAAA_Group
+  augroup! AAAAA_Group
+  delfunc OnPumChange
+  delfunc Omni_test
+  delfunc Comp
+  unlet g:item
+  unlet g:word
+endfunc
+
+" Check that tie breaking is stable for completeopt+=fuzzy (which should
+" behave the same on different platforms).
+func Test_complete_fuzzy_match_tie()
+  new
+  set completeopt+=fuzzy,noselect
+  call setline(1, ['aaabbccc', 'aaabbCCC', 'aaabbcccc', 'aaabbCCCC', ''])
+
+  call feedkeys("Gcc\<C-X>\<C-N>ab\<C-N>\<C-Y>", 'tx')
+  call assert_equal('aaabbccc', getline('.'))
+  call feedkeys("Gcc\<C-X>\<C-N>ab\<C-N>\<C-N>\<C-Y>", 'tx')
+  call assert_equal('aaabbCCC', getline('.'))
+  call feedkeys("Gcc\<C-X>\<C-N>ab\<C-N>\<C-N>\<C-N>\<C-Y>", 'tx')
+  call assert_equal('aaabbcccc', getline('.'))
+  call feedkeys("Gcc\<C-X>\<C-N>ab\<C-N>\<C-N>\<C-N>\<C-N>\<C-Y>", 'tx')
+  call assert_equal('aaabbCCCC', getline('.'))
+
+  bwipe!
+  set completeopt&
 endfunc
 
 " vim: shiftwidth=2 sts=2 expandtab nofoldenable

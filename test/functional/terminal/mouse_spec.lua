@@ -1,10 +1,12 @@
-local helpers = require('test.functional.helpers')(after_each)
-local thelpers = require('test.functional.terminal.helpers')
-local clear, eq, eval = helpers.clear, helpers.eq, helpers.eval
-local feed, api, command = helpers.feed, helpers.api, helpers.command
-local feed_data = thelpers.feed_data
-local is_os = helpers.is_os
-local skip = helpers.skip
+local t = require('test.testutil')
+local n = require('test.functional.testnvim')()
+
+local tt = require('test.functional.testterm')
+local clear, eq, eval = n.clear, t.eq, n.eval
+local feed, api, command = n.feed, n.api, n.command
+local feed_data = tt.feed_data
+local is_os = t.is_os
+local skip = t.skip
 
 describe(':terminal mouse', function()
   local screen
@@ -12,10 +14,12 @@ describe(':terminal mouse', function()
   before_each(function()
     clear()
     api.nvim_set_option_value('statusline', '==========', {})
-    command('highlight StatusLine cterm=NONE')
-    command('highlight StatusLineNC cterm=NONE')
-    command('highlight VertSplit cterm=NONE')
-    screen = thelpers.screen_setup()
+    screen = tt.setup_screen()
+    command('highlight StatusLine NONE')
+    command('highlight StatusLineNC NONE')
+    command('highlight StatusLineTerm NONE')
+    command('highlight StatusLineTermNC NONE')
+    command('highlight VertSplit NONE')
     local lines = {}
     for i = 1, 30 do
       table.insert(lines, 'line' .. tostring(i))
@@ -41,6 +45,7 @@ describe(':terminal mouse', function()
     end)
 
     it('will exit focus and trigger Normal mode mapping on mouse click', function()
+      feed([[<C-\><C-N>qri]])
       command('let g:got_leftmouse = 0')
       command('nnoremap <LeftMouse> <Cmd>let g:got_leftmouse = 1<CR>')
       eq('t', eval('mode(1)'))
@@ -48,9 +53,12 @@ describe(':terminal mouse', function()
       feed('<LeftMouse>')
       eq('nt', eval('mode(1)'))
       eq(1, eval('g:got_leftmouse'))
+      feed('q')
+      eq('i<LeftMouse>', eval('keytrans(@r)'))
     end)
 
     it('will exit focus and trigger Normal mode mapping on mouse click with modifier', function()
+      feed([[<C-\><C-N>qri]])
       command('let g:got_ctrl_leftmouse = 0')
       command('nnoremap <C-LeftMouse> <Cmd>let g:got_ctrl_leftmouse = 1<CR>')
       eq('t', eval('mode(1)'))
@@ -58,6 +66,8 @@ describe(':terminal mouse', function()
       feed('<C-LeftMouse>')
       eq('nt', eval('mode(1)'))
       eq(1, eval('g:got_ctrl_leftmouse'))
+      feed('q')
+      eq('i<C-LeftMouse>', eval('keytrans(@r)'))
     end)
 
     it('will exit focus on <C-\\> + mouse-scroll', function()
@@ -89,8 +99,8 @@ describe(':terminal mouse', function()
 
     describe('with mouse events enabled by the program', function()
       before_each(function()
-        thelpers.enable_mouse()
-        thelpers.feed_data('mouse enabled\n')
+        tt.enable_mouse()
+        tt.feed_data('mouse enabled\n')
         screen:expect([[
           line27                                            |
           line28                                            |
@@ -417,8 +427,8 @@ describe(':terminal mouse', function()
         ]])
 
         -- enabling mouse won't affect interaction with other windows
-        thelpers.enable_mouse()
-        thelpers.feed_data('mouse enabled\n')
+        tt.enable_mouse()
+        tt.feed_data('mouse enabled\n')
         screen:expect([[
           {7: 27 }line                 │line30                  |
           {7: 28 }line                 │rows: 5, cols: 25       |

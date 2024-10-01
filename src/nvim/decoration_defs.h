@@ -10,7 +10,7 @@
 
 typedef struct {
   char *text;
-  int hl_id;
+  int hl_id;  ///< -1 if not specified
 } VirtTextChunk;
 
 typedef kvec_t(VirtTextChunk) VirtText;
@@ -56,6 +56,7 @@ typedef struct {
 } DecorHighlightInline;
 
 #define DECOR_HIGHLIGHT_INLINE_INIT { 0, DECOR_PRIORITY_BASE, 0,  0 }
+
 typedef struct {
   uint16_t flags;
   DecorPriority priority;

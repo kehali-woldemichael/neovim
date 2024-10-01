@@ -27,6 +27,7 @@
 #include "nvim/diff.h"
 #include "nvim/drawscreen.h"
 #include "nvim/edit.h"
+#include "nvim/errors.h"
 #include "nvim/eval.h"
 #include "nvim/ex_cmds_defs.h"
 #include "nvim/ex_eval.h"
@@ -234,7 +235,7 @@ int readfile(char *fname, char *sfname, linenr_T from, linenr_T lines_to_skip,
   int using_b_fname;
   static char *msg_is_a_directory = N_("is a directory");
 
-  au_did_filetype = false;  // reset before triggering any autocommands
+  curbuf->b_au_did_filetype = false;  // reset before triggering any autocommands
 
   curbuf->b_no_eol_lnum = 0;    // in case it was set by the previous read
 
@@ -887,10 +888,7 @@ retry:
         // Use buffer >= 64K.  Add linerest to double the size if the
         // line gets very long, to avoid a lot of copying. But don't
         // read more than 1 Mbyte at a time, so we can be interrupted.
-        size = 0x10000 + linerest;
-        if (size > 0x100000) {
-          size = 0x100000;
-        }
+        size = MIN(0x10000 + linerest, 0x100000);
       }
 
       // Protect against the argument of lalloc() going negative.
@@ -957,7 +955,7 @@ retry:
             int tlen = 0;
             while (true) {
               p = (uint8_t *)ml_get(read_buf_lnum) + read_buf_col;
-              int n = (int)strlen((char *)p);
+              int n = ml_get_len(read_buf_lnum) - read_buf_col;
               if (tlen + n + 1 > size) {
                 // Filled up to "size", append partial line.
                 // Change NL to NUL to reverse the effect done
@@ -1620,7 +1618,7 @@ failed:
     save_file_ff(curbuf);
     // If editing a new file: set 'fenc' for the current buffer.
     // Also for ":read ++edit file".
-    set_string_option_direct(kOptFileencoding, fenc, OPT_LOCAL, 0);
+    set_option_direct(kOptFileencoding, CSTR_AS_OPTVAL(fenc), OPT_LOCAL, 0);
   }
   if (fenc_alloced) {
     xfree(fenc);
@@ -1854,7 +1852,7 @@ failed:
     } else if (newfile || (read_buffer && sfname != NULL)) {
       apply_autocmds_exarg(EVENT_BUFREADPOST, NULL, sfname,
                            false, curbuf, eap);
-      if (!au_did_filetype && *curbuf->b_p_ft != NUL) {
+      if (!curbuf->b_au_did_filetype && *curbuf->b_p_ft != NUL) {
         // EVENT_FILETYPE was not triggered but the buffer already has a
         // filetype.  Trigger EVENT_FILETYPE using the existing filetype.
         apply_autocmds(EVENT_FILETYPE, curbuf->b_p_ft, curbuf->b_fname, true, curbuf);
@@ -1968,7 +1966,7 @@ void set_forced_fenc(exarg_T *eap)
   }
 
   char *fenc = enc_canonize(eap->cmd + eap->force_enc);
-  set_string_option_direct(kOptFileencoding, fenc, OPT_LOCAL, 0);
+  set_option_direct(kOptFileencoding, CSTR_AS_OPTVAL(fenc), OPT_LOCAL, 0);
   xfree(fenc);
 }
 
@@ -2418,7 +2416,7 @@ char *modname(const char *fname, const char *ext, bool prepend_dot)
 
   // the file name has at most BASENAMELEN characters.
   if (strlen(ptr) > BASENAMELEN) {
-    ptr[BASENAMELEN] = '\0';
+    ptr[BASENAMELEN] = NUL;
   }
 
   char *s = ptr + strlen(ptr);
@@ -2629,7 +2627,7 @@ static int rename_with_tmp(const char *const from, const char *const to)
   STRCPY(tempname, from);
   for (int n = 123; n < 99999; n++) {
     char *tail = path_tail(tempname);
-    snprintf(tail, (size_t)((MAXPATHL + 1) - (tail - tempname - 1)), "%d", n);
+    snprintf(tail, (size_t)((MAXPATHL + 1) - (tail - tempname)), "%d", n);
 
     if (!os_path_exists(tempname)) {
       if (os_rename(from, tempname) == OK) {
@@ -2656,7 +2654,6 @@ static int rename_with_tmp(const char *const from, const char *const to)
 int vim_rename(const char *from, const char *to)
   FUNC_ATTR_NONNULL_ALL
 {
-  char *errmsg = NULL;
   bool use_tmp_file = false;
 
   // When the names are identical, there is nothing to do.  When they refer
@@ -2700,61 +2697,57 @@ int vim_rename(const char *from, const char *to)
   }
 
   // Rename() failed, try copying the file.
-  int perm = os_getperm(from);
+  int ret = vim_copyfile(from, to);
+  if (ret != OK) {
+    return -1;
+  }
+
+  if (os_fileinfo(from, &from_info)) {
+    os_remove(from);
+  }
+
+  return 0;
+}
+
+/// Create the new file with same permissions as the original.
+/// Return FAIL for failure, OK for success.
+int vim_copyfile(const char *from, const char *to)
+{
+  char *errmsg = NULL;
+
+#ifdef HAVE_READLINK
+  FileInfo from_info;
+  if (os_fileinfo_link(from, &from_info) && S_ISLNK(from_info.stat.st_mode)) {
+    int ret = -1;
+
+    char linkbuf[MAXPATHL + 1];
+    ssize_t len = readlink(from, linkbuf, MAXPATHL);
+    if (len > 0) {
+      linkbuf[len] = NUL;
+
+      // Create link
+      ret = symlink(linkbuf, to);
+    }
+
+    return ret == 0 ? OK : FAIL;
+  }
+#endif
+
   // For systems that support ACL: get the ACL from the original file.
   vim_acl_T acl = os_get_acl(from);
-  int fd_in = os_open(from, O_RDONLY, 0);
-  if (fd_in < 0) {
+
+  if (os_copy(from, to, UV_FS_COPYFILE_EXCL) != 0) {
     os_free_acl(acl);
-    return -1;
+    return FAIL;
   }
 
-  // Create the new file with same permissions as the original.
-  int fd_out = os_open(to, O_CREAT|O_EXCL|O_WRONLY|O_NOFOLLOW, perm);
-  if (fd_out < 0) {
-    close(fd_in);
-    os_free_acl(acl);
-    return -1;
-  }
-
-  // Avoid xmalloc() here as vim_rename() is called by buf_write() when nvim
-  // is `preserve_exit()`ing.
-  char *buffer = try_malloc(WRITEBUFSIZE);
-  if (buffer == NULL) {
-    close(fd_out);
-    close(fd_in);
-    os_free_acl(acl);
-    return -1;
-  }
-
-  int n;
-  while ((n = read_eintr(fd_in, buffer, WRITEBUFSIZE)) > 0) {
-    if (write_eintr(fd_out, buffer, (size_t)n) != n) {
-      errmsg = _("E208: Error writing to \"%s\"");
-      break;
-    }
-  }
-
-  xfree(buffer);
-  close(fd_in);
-  if (close(fd_out) < 0) {
-    errmsg = _("E209: Error closing \"%s\"");
-  }
-  if (n < 0) {
-    errmsg = _("E210: Error reading \"%s\"");
-    to = from;
-  }
-#ifndef UNIX  // For Unix os_open() already set the permission.
-  os_setperm(to, perm);
-#endif
   os_set_acl(to, acl);
   os_free_acl(acl);
   if (errmsg != NULL) {
     semsg(errmsg, to);
-    return -1;
+    return FAIL;
   }
-  os_remove(from);
-  return 0;
+  return OK;
 }
 
 static bool already_warned = false;
@@ -2799,9 +2792,7 @@ int check_timestamps(int focus)
         bufref_T bufref;
         set_bufref(&bufref, buf);
         const int n = buf_check_timestamp(buf);
-        if (didit < n) {
-          didit = n;
-        }
+        didit = MAX(didit, n);
         if (n > 0 && !bufref_valid(&bufref)) {
           // Autocommands have removed the buffer, start at the first one again.
           buf = firstbuf;
@@ -3151,9 +3142,9 @@ void buf_reload(buf_T *buf, int orig_mode, bool reload_options)
 
   if (saved == OK) {
     curbuf->b_flags |= BF_CHECK_RO;           // check for RO again
-    keep_filetype = true;                     // don't detect 'filetype'
+    curbuf->b_keep_filetype = true;           // don't detect 'filetype'
     if (readfile(buf->b_ffname, buf->b_fname, 0, 0,
-                 (linenr_T)MAXLNUM, &ea, flags, false) != OK) {
+                 (linenr_T)MAXLNUM, &ea, flags, shortmess(SHM_FILEINFO)) != OK) {
       if (!aborting()) {
         semsg(_("E321: Could not reload \"%s\""), buf->b_fname);
       }
@@ -3191,15 +3182,11 @@ void buf_reload(buf_T *buf, int orig_mode, bool reload_options)
 
   // Restore the topline and cursor position and check it (lines may
   // have been removed).
-  if (old_topline > curbuf->b_ml.ml_line_count) {
-    curwin->w_topline = curbuf->b_ml.ml_line_count;
-  } else {
-    curwin->w_topline = old_topline;
-  }
+  curwin->w_topline = MIN(old_topline, curbuf->b_ml.ml_line_count);
   curwin->w_cursor = old_cursor;
-  check_cursor();
+  check_cursor(curwin);
   update_topline(curwin);
-  keep_filetype = false;
+  curbuf->b_keep_filetype = false;
 
   // Update folds unless they are defined manually.
   FOR_ALL_TAB_WINDOWS(tp, wp) {
@@ -3277,17 +3264,11 @@ static void vim_mktempdir(void)
   char tmp[TEMP_FILE_PATH_MAXLEN];
   char path[TEMP_FILE_PATH_MAXLEN];
   char user[40] = { 0 };
-  char appname[40] = { 0 };
 
   os_get_username(user, sizeof(user));
   // Usernames may contain slashes! #19240
   memchrsub(user, '/', '_', sizeof(user));
   memchrsub(user, '\\', '_', sizeof(user));
-
-  // Appname may be a relative path, replace slashes to make it name-like.
-  xstrlcpy(appname, get_appname(), sizeof(appname));
-  memchrsub(appname, '/', '%', sizeof(appname));
-  memchrsub(appname, '\\', '%', sizeof(appname));
 
   // Make sure the umask doesn't remove the executable bit.
   // "repl" has been reported to use "0177".
@@ -3296,14 +3277,15 @@ static void vim_mktempdir(void)
     // Expand environment variables, leave room for "/tmp/nvim.<user>/XXXXXX/999999999".
     expand_env((char *)temp_dirs[i], tmp, TEMP_FILE_PATH_MAXLEN - 64);
     if (!os_isdir(tmp)) {
+      if (strequal("$TMPDIR", temp_dirs[i])) {
+        WLOG("$TMPDIR tempdir not a directory (or does not exist): %s", tmp);
+      }
       continue;
     }
 
     // "/tmp/" exists, now try to create "/tmp/nvim.<user>/".
     add_pathsep(tmp);
-
-    xstrlcat(tmp, appname, sizeof(tmp));
-    xstrlcat(tmp, ".", sizeof(tmp));
+    xstrlcat(tmp, "nvim.", sizeof(tmp));
     xstrlcat(tmp, user, sizeof(tmp));
     os_mkdir(tmp, 0700);  // Always create, to avoid a race.
     bool owned = os_file_owned(tmp);
@@ -3329,7 +3311,7 @@ static void vim_mktempdir(void)
 #endif
       // If our "root" tempdir is invalid or fails, proceed without "<user>/".
       // Else user1 could break user2 by creating "/tmp/nvim.user2/".
-      tmp[strlen(tmp) - strlen(user)] = '\0';
+      tmp[strlen(tmp) - strlen(user)] = NUL;
     }
 
     // Now try to create "/tmp/nvim.<user>/XXXXXX".

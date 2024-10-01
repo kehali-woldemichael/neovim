@@ -47,8 +47,8 @@ typedef struct {
 #define VALID_VIRTCOL   0x04    // w_virtcol (file col) is valid
 #define VALID_CHEIGHT   0x08    // w_cline_height and w_cline_folded valid
 #define VALID_CROW      0x10    // w_cline_row is valid
-#define VALID_BOTLINE   0x20    // w_botine and w_empty_rows are valid
-#define VALID_BOTLINE_AP 0x40   // w_botine is approximated
+#define VALID_BOTLINE   0x20    // w_botline and w_empty_rows are valid
+#define VALID_BOTLINE_AP 0x40   // w_botline is approximated
 #define VALID_TOPLINE   0x80    // w_topline is valid (for cursor position)
 
 // flags for b_flags
@@ -139,6 +139,8 @@ typedef struct {
 #define w_ve_flags w_onebuf_opt.wo_ve_flags  // flags for 'virtualedit'
   OptInt wo_nuw;
 #define w_p_nuw w_onebuf_opt.wo_nuw    // 'numberwidth'
+  int wo_wfb;
+#define w_p_wfb w_onebuf_opt.wo_wfb    // 'winfixbuf'
   int wo_wfh;
 #define w_p_wfh w_onebuf_opt.wo_wfh    // 'winfixheight'
   int wo_wfw;
@@ -391,7 +393,7 @@ struct file_buffer {
 
   /// Change-identifier incremented for each change, including undo.
   ///
-  /// This is a dictionary item used to store b:changedtick.
+  /// This is a dict item used to store b:changedtick.
   ChangedtickDictItem changedtick_di;
 
   varnumber_T b_last_changedtick;       // b:changedtick when TextChanged was
@@ -459,6 +461,19 @@ struct file_buffer {
 
   bool b_marks_read;            // Have we read ShaDa marks yet?
 
+  bool b_modified_was_set;  ///< did ":set modified"
+  bool b_did_filetype;      ///< FileType event found
+  bool b_keep_filetype;     ///< value for did_filetype when starting
+                            ///< to execute autocommands
+
+  /// Set by the apply_autocmds_group function if the given event is equal to
+  /// EVENT_FILETYPE. Used by the readfile function in order to determine if
+  /// EVENT_BUFREADPOST triggered the EVENT_FILETYPE.
+  ///
+  /// Relying on this value requires one to reset it prior calling
+  /// apply_autocmds_group().
+  bool b_au_did_filetype;
+
   // The following only used in undo.c.
   u_header_T *b_u_oldhead;     // pointer to oldest header
   u_header_T *b_u_newhead;     // pointer to newest header; may not be valid
@@ -518,6 +533,8 @@ struct file_buffer {
   char *b_p_cinsd;              ///< 'cinscopedecls'
   char *b_p_com;                ///< 'comments'
   char *b_p_cms;                ///< 'commentstring'
+  char *b_p_cot;                ///< 'completeopt' local value
+  unsigned b_cot_flags;         ///< flags for 'completeopt'
   char *b_p_cpt;                ///< 'complete'
 #ifdef BACKSLASH_IN_FILENAME
   char *b_p_csl;                ///< 'completeslash'
@@ -655,8 +672,8 @@ struct file_buffer {
   int b_bad_char;               // "++bad=" argument when edit started or 0
   int b_start_bomb;             // 'bomb' when it was read
 
-  ScopeDictDictItem b_bufvar;  ///< Variable for "b:" Dictionary.
-  dict_T *b_vars;  ///< b: scope dictionary.
+  ScopeDictDictItem b_bufvar;  ///< Variable for "b:" Dict.
+  dict_T *b_vars;  ///< b: scope Dict.
 
   // When a buffer is created, it starts without a swap file.  b_may_swap is
   // then set to indicate that a swap file may be opened later.  It is reset
@@ -695,7 +712,7 @@ struct file_buffer {
 
   Terminal *terminal;           // Terminal instance associated with the buffer
 
-  dict_T *additional_data;      // Additional data from shada file if any.
+  AdditionalData *additional_data;      // Additional data from shada file if any.
 
   int b_mapped_ctrl_c;          // modes where CTRL-C is mapped
 
@@ -722,8 +739,6 @@ struct file_buffer {
 
   // The number for times the current line has been flushed in the memline.
   int flush_count;
-
-  int b_diff_failed;    // internal diff failed for this buffer
 };
 
 // Stuff for diff mode.
@@ -777,7 +792,7 @@ struct tabpage_S {
   int tp_diff_invalid;              ///< list of diffs is outdated
   int tp_diff_update;               ///< update diffs before redrawing
   frame_T *(tp_snapshot[SNAP_COUNT]);    ///< window layout snapshots
-  ScopeDictDictItem tp_winvar;      ///< Variable for "t:" Dictionary.
+  ScopeDictDictItem tp_winvar;      ///< Variable for "t:" Dict.
   dict_T *tp_vars;         ///< Internal variables, local to tab page.
   char *tp_localdir;       ///< Absolute path of local cwd or NULL.
   char *tp_prevdir;        ///< Previous directory.
@@ -1020,6 +1035,8 @@ struct window_S {
   int w_ns_hl_active;
   int *w_ns_hl_attr;
 
+  Set(uint32_t) w_ns_set;
+
   int w_hl_id_normal;               ///< 'winhighlight' normal id
   int w_hl_attr_normal;             ///< 'winhighlight' normal final attrs
   int w_hl_attr_normalnc;           ///< 'winhighlight' NormalNC final attrs
@@ -1028,8 +1045,7 @@ struct window_S {
 
   win_T *w_prev;              ///< link to previous window
   win_T *w_next;              ///< link to next window
-  bool w_closing;                   ///< window is being closed, don't let
-                                    ///< autocommands close it too.
+  bool w_locked;                    ///< don't let autocommands close the window
 
   frame_T *w_frame;             ///< frame containing this window
 
@@ -1247,8 +1263,8 @@ struct window_S {
 
   int w_scbind_pos;
 
-  ScopeDictDictItem w_winvar;  ///< Variable for "w:" dictionary.
-  dict_T *w_vars;  ///< Dictionary with w: variables.
+  ScopeDictDictItem w_winvar;       ///< Variable for "w:" dict.
+  dict_T *w_vars;                   ///< Dict with w: variables.
 
   // The w_prev_pcmark field is used to check whether we really did jump to
   // a new line after setting the w_pcmark.  If not, then we revert to

@@ -1,12 +1,14 @@
-local helpers = require('test.functional.helpers')(after_each)
-local clear = helpers.clear
-local eq = helpers.eq
-local insert = helpers.insert
-local exec_lua = helpers.exec_lua
-local command = helpers.command
-local feed = helpers.feed
-local poke_eventloop = helpers.poke_eventloop
+local t = require('test.testutil')
+local n = require('test.functional.testnvim')()
 local Screen = require('test.functional.ui.screen')
+
+local clear = n.clear
+local eq = t.eq
+local insert = n.insert
+local exec_lua = n.exec_lua
+local command = n.command
+local feed = n.feed
+local poke_eventloop = n.poke_eventloop
 
 before_each(clear)
 
@@ -46,13 +48,13 @@ void ui_refresh(void)
   end
 
   local function get_fold_levels()
-    return exec_lua([[
-    local res = {}
-    for i = 1, vim.api.nvim_buf_line_count(0) do
-      res[i] = vim.treesitter.foldexpr(i)
-    end
-    return res
-    ]])
+    return exec_lua(function()
+      local res = {}
+      for i = 1, vim.api.nvim_buf_line_count(0) do
+        res[i] = vim.treesitter.foldexpr(i)
+      end
+      return res
+    end)
   end
 
   it('can compute fold levels', function()
@@ -244,9 +246,13 @@ function f()
 end
 -- comment]])
 
-    exec_lua(
-      [[vim.treesitter.query.set('lua', 'folds', '[(function_declaration) (parameters) (arguments)] @fold')]]
-    )
+    exec_lua(function()
+      vim.treesitter.query.set(
+        'lua',
+        'folds',
+        '[(function_declaration) (parameters) (arguments)] @fold'
+      )
+    end)
     parse('lua')
 
     eq({
@@ -288,9 +294,13 @@ function f()
   )
 end]])
 
-    exec_lua(
-      [[vim.treesitter.query.set('lua', 'folds', '[(function_declaration) (function_definition) (parameters) (arguments)] @fold')]]
-    )
+    exec_lua(function()
+      vim.treesitter.query.set(
+        'lua',
+        'folds',
+        '[(function_declaration) (function_definition) (parameters) (arguments)] @fold'
+      )
+    end)
     parse('lua')
 
     -- If fold1.stop = fold2.start, then move fold1's stop up so that fold2.start gets proper level.
@@ -331,9 +341,13 @@ function f(a)
   end
 end]])
 
-    exec_lua(
-      [[vim.treesitter.query.set('lua', 'folds', '[(if_statement) (function_declaration) (parameters) (arguments) (table_constructor)] @fold')]]
-    )
+    exec_lua(function()
+      vim.treesitter.query.set(
+        'lua',
+        'folds',
+        '[(if_statement) (function_declaration) (parameters) (arguments) (table_constructor)] @fold'
+      )
+    end)
     parse('lua')
 
     eq({
@@ -393,6 +407,28 @@ t3]])
     }, get_fold_levels())
 
     command([[set foldminlines=1 foldnestmax=1]])
+
+    eq({
+      [1] = '>1',
+      [2] = '1',
+      [3] = '1',
+      [4] = '1',
+      [5] = '1',
+      [6] = '1',
+    }, get_fold_levels())
+  end)
+
+  it('handles quantified patterns', function()
+    insert([[
+-- hello
+-- hello
+-- hello
+-- hello
+-- hello
+-- hello]])
+
+    exec_lua([[vim.treesitter.query.set('lua', 'folds', '(comment)+ @fold')]])
+    parse('lua')
 
     eq({
       [1] = '>1',
@@ -622,6 +658,67 @@ t3]])
     }
   end)
 
+  it('does not extend closed fold with `o`/`O`', function()
+    local screen = Screen.new(60, 24)
+    screen:attach()
+
+    insert(test_text)
+    parse('c')
+    command([[set foldmethod=expr foldexpr=v:lua.vim.treesitter.foldexpr() foldcolumn=1]])
+
+    feed('5ggzco')
+    screen:expect({
+      grid = [[
+        {7:-}void ui_refresh(void)                                      |
+        {7:│}{                                                          |
+        {7:│}  int width = INT_MAX, height = INT_MAX;                   |
+        {7:│}  bool ext_widgets[kUIExtCount];                           |
+        {7:+}{13:+---  3 lines: for (UIExtension i = 0; (int)i < kUIExtCount}|
+        {7:│}^                                                           |
+        {7:│}                                                           |
+        {7:│}  bool inclusive = ui_override();                          |
+        {7:-}  for (size_t i = 0; i < ui_count; i++) {                  |
+        {7:2}    UI *ui = uis[i];                                       |
+        {7:2}    width = MIN(ui->width, width);                         |
+        {7:2}    height = MIN(ui->height, height);                      |
+        {7:2}    foo = BAR(ui->bazaar, bazaar);                         |
+        {7:-}    for (UIExtension j = 0; (int)j < kUIExtCount; j++) {   |
+        {7:3}      ext_widgets[j] &= (ui->ui_ext[j] || inclusive);      |
+        {7:3}    }                                                      |
+        {7:2}  }                                                        |
+        {7:│}}                                                          |
+        {1:~                                                           }|*5
+        {5:-- INSERT --}                                                |
+      ]],
+    })
+
+    feed('<Esc>O')
+    screen:expect({
+      grid = [[
+        {7:-}void ui_refresh(void)                                      |
+        {7:│}{                                                          |
+        {7:│}  int width = INT_MAX, height = INT_MAX;                   |
+        {7:│}  bool ext_widgets[kUIExtCount];                           |
+        {7:+}{13:+---  3 lines: for (UIExtension i = 0; (int)i < kUIExtCount}|
+        {7:│}^                                                           |
+        {7:│}                                                           |*2
+        {7:│}  bool inclusive = ui_override();                          |
+        {7:-}  for (size_t i = 0; i < ui_count; i++) {                  |
+        {7:2}    UI *ui = uis[i];                                       |
+        {7:2}    width = MIN(ui->width, width);                         |
+        {7:2}    height = MIN(ui->height, height);                      |
+        {7:2}    foo = BAR(ui->bazaar, bazaar);                         |
+        {7:-}    for (UIExtension j = 0; (int)j < kUIExtCount; j++) {   |
+        {7:3}      ext_widgets[j] &= (ui->ui_ext[j] || inclusive);      |
+        {7:3}    }                                                      |
+        {7:2}  }                                                        |
+        {7:│}}                                                          |
+        {1:~                                                           }|*4
+        {5:-- INSERT --}                                                |
+      ]],
+    })
+  end)
+
   it("doesn't open folds that are not touched", function()
     local screen = Screen.new(40, 8)
     screen:set_default_attr_ids({
@@ -650,7 +747,7 @@ t2]])
       grid = [[
       {1:-}# h1                                   |
       {1:│}t1                                     |
-      {1:│}^                                       |
+      {1:-}^                                       |
       {1:+}{2:+--  2 lines: # h2·····················}|
       {3:~                                       }|*3
       {4:-- INSERT --}                            |

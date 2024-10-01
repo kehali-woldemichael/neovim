@@ -4,10 +4,10 @@ local Range = require('vim.treesitter._range')
 
 local ns = api.nvim_create_namespace('treesitter/highlighter')
 
----@alias vim.treesitter.highlighter.Iter fun(end_line: integer|nil): integer, TSNode, TSMetadata
+---@alias vim.treesitter.highlighter.Iter fun(end_line: integer|nil): integer, TSNode, vim.treesitter.query.TSMetadata, TSQueryMatch
 
----@class vim.treesitter.highlighter.Query
----@field private _query vim.treesitter.query.Query?
+---@class (private) vim.treesitter.highlighter.Query
+---@field private _query vim.treesitter.Query?
 ---@field private lang string
 ---@field private hl_cache table<integer,integer>
 local TSHighlighterQuery = {}
@@ -47,38 +47,39 @@ function TSHighlighterQuery:get_hl_from_capture(capture)
   return self.hl_cache[capture]
 end
 
----@package
+---@nodoc
 function TSHighlighterQuery:query()
   return self._query
 end
 
----@class vim.treesitter.highlighter.State
+---@class (private) vim.treesitter.highlighter.State
 ---@field tstree TSTree
 ---@field next_row integer
 ---@field iter vim.treesitter.highlighter.Iter?
 ---@field highlighter_query vim.treesitter.highlighter.Query
 
+---@nodoc
 ---@class vim.treesitter.highlighter
 ---@field active table<integer,vim.treesitter.highlighter>
 ---@field bufnr integer
----@field orig_spelloptions string
+---@field private orig_spelloptions string
 --- A map of highlight states.
 --- This state is kept during rendering across each line update.
----@field _highlight_states vim.treesitter.highlighter.State[]
----@field _queries table<string,vim.treesitter.highlighter.Query>
----@field tree LanguageTree
----@field redraw_count integer
+---@field private _highlight_states vim.treesitter.highlighter.State[]
+---@field private _queries table<string,vim.treesitter.highlighter.Query>
+---@field tree vim.treesitter.LanguageTree
+---@field private redraw_count integer
 local TSHighlighter = {
   active = {},
 }
 
 TSHighlighter.__index = TSHighlighter
 
----@package
+---@nodoc
 ---
 --- Creates a highlighter for `tree`.
 ---
----@param tree LanguageTree parser object to use for highlighting
+---@param tree vim.treesitter.LanguageTree parser object to use for highlighting
 ---@param opts (table|nil) Configuration of the highlighter:
 ---           - queries table overwrite queries used by the highlighter
 ---@return vim.treesitter.highlighter Created highlighter object
@@ -138,11 +139,14 @@ function TSHighlighter.new(tree, opts)
   -- but use synload.vim rather than syntax.vim to not enable
   -- syntax FileType autocmds. Later on we should integrate with the
   -- `:syntax` and `set syntax=...` machinery properly.
+  -- Still need to ensure that syntaxset augroup exists, so that calling :destroy()
+  -- immediately afterwards will not error.
   if vim.g.syntax_on ~= 1 then
     vim.cmd.runtime({ 'syntax/synload.vim', bang = true })
+    vim.api.nvim_create_augroup('syntaxset', { clear = false })
   end
 
-  api.nvim_buf_call(self.bufnr, function()
+  vim._with({ buf = self.bufnr }, function()
     vim.opt_local.spelloptions:append('noplainbuffer')
   end)
 
@@ -214,7 +218,7 @@ end
 ---@param start_row integer
 ---@param new_end integer
 function TSHighlighter:on_bytes(_, _, start_row, _, _, _, _, _, new_end)
-  api.nvim__buf_redraw_range(self.bufnr, start_row, start_row + new_end + 1)
+  api.nvim__redraw({ buf = self.bufnr, range = { start_row, start_row + new_end + 1 } })
 end
 
 ---@package
@@ -226,13 +230,12 @@ end
 ---@param changes Range6[]
 function TSHighlighter:on_changedtree(changes)
   for _, ch in ipairs(changes) do
-    api.nvim__buf_redraw_range(self.bufnr, ch[1], ch[4] + 1)
+    api.nvim__redraw({ buf = self.bufnr, range = { ch[1], ch[4] + 1 } })
   end
 end
 
 --- Gets the query used for @param lang
---
----@package
+---@nodoc
 ---@param lang string Language used by the highlighter.
 ---@return vim.treesitter.highlighter.Query
 function TSHighlighter:get_query(lang)
@@ -241,6 +244,46 @@ function TSHighlighter:get_query(lang)
   end
 
   return self._queries[lang]
+end
+
+--- @param match TSQueryMatch
+--- @param bufnr integer
+--- @param capture integer
+--- @param metadata vim.treesitter.query.TSMetadata
+--- @return string?
+local function get_url(match, bufnr, capture, metadata)
+  ---@type string|number|nil
+  local url = metadata[capture] and metadata[capture].url
+
+  if not url or type(url) == 'string' then
+    return url
+  end
+
+  local captures = match:captures()
+
+  if not captures[url] then
+    return
+  end
+
+  -- Assume there is only one matching node. If there is more than one, take the URL
+  -- from the first.
+  local other_node = captures[url][1]
+
+  return vim.treesitter.get_node_text(other_node, bufnr, {
+    metadata = metadata[url],
+  })
+end
+
+--- @param capture_name string
+--- @return boolean?, integer
+local function get_spell(capture_name)
+  if capture_name == 'spell' then
+    return true, 0
+  elseif capture_name == 'nospell' then
+    -- Give nospell a higher priority so it always overrides spell captures.
+    return false, 1
+  end
+  return nil, 0
 end
 
 ---@param self vim.treesitter.highlighter
@@ -258,12 +301,16 @@ local function on_line_impl(self, buf, line, is_spell_nav)
     end
 
     if state.iter == nil or state.next_row < line then
+      -- Mainly used to skip over folds
+
+      -- TODO(lewis6991): Creating a new iterator loses the cached predicate results for query
+      -- matches. Move this logic inside iter_captures() so we can maintain the cache.
       state.iter =
         state.highlighter_query:query():iter_captures(root_node, self.bufnr, line, root_end_row + 1)
     end
 
     while line >= state.next_row do
-      local capture, node, metadata = state.iter(line)
+      local capture, node, metadata, match = state.iter(line)
 
       local range = { root_end_row + 1, 0, root_end_row + 1, 0 }
       if node then
@@ -275,27 +322,30 @@ local function on_line_impl(self, buf, line, is_spell_nav)
         local hl = state.highlighter_query:get_hl_from_capture(capture)
 
         local capture_name = state.highlighter_query:query().captures[capture]
-        local spell = nil ---@type boolean?
-        if capture_name == 'spell' then
-          spell = true
-        elseif capture_name == 'nospell' then
-          spell = false
-        end
 
-        -- Give nospell a higher priority so it always overrides spell captures.
-        local spell_pri_offset = capture_name == 'nospell' and 1 or 0
+        local spell, spell_pri_offset = get_spell(capture_name)
+
+        -- The "priority" attribute can be set at the pattern level or on a particular capture
+        local priority = (
+          tonumber(metadata.priority or metadata[capture] and metadata[capture].priority)
+          or vim.highlight.priorities.treesitter
+        ) + spell_pri_offset
+
+        -- The "conceal" attribute can be set at the pattern level or on a particular capture
+        local conceal = metadata.conceal or metadata[capture] and metadata[capture].conceal
+
+        local url = get_url(match, buf, capture, metadata)
 
         if hl and end_row >= line and (not is_spell_nav or spell ~= nil) then
-          local priority = (tonumber(metadata.priority) or vim.highlight.priorities.treesitter)
-            + spell_pri_offset
           api.nvim_buf_set_extmark(buf, ns, start_row, start_col, {
             end_line = end_row,
             end_col = end_col,
             hl_group = hl,
             ephemeral = true,
             priority = priority,
-            conceal = metadata.conceal,
+            conceal = conceal,
             spell = spell,
+            url = url,
           })
         end
       end
@@ -330,11 +380,15 @@ function TSHighlighter._on_spell_nav(_, _, buf, srow, _, erow, _)
     return
   end
 
+  -- Do not affect potentially populated highlight state. Here we just want a temporary
+  -- empty state so the C code can detect whether the region should be spell checked.
+  local highlight_states = self._highlight_states
   self:prepare_highlight_states(srow, erow)
 
   for row = srow, erow do
     on_line_impl(self, buf, row, true)
   end
+  self._highlight_states = highlight_states
 end
 
 ---@private

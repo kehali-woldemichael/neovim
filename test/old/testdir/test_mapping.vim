@@ -236,21 +236,25 @@ func Test_map_meta_multibyte()
 endfunc
 
 func Test_map_super_quotes()
-  if has('gui_gtk') || has('gui_gtk3') || has("macos")
-    imap <D-"> foo
-    call feedkeys("Go-\<*D-\">-\<Esc>", "xt")
-    call assert_equal("-foo-", getline('$'))
-    set nomodified
-    iunmap <D-">
+  if "\<D-j>"[-1:] == '>'
+    throw 'Skipped: <D- modifier not supported'
   endif
+
+  imap <D-"> foo
+  call feedkeys("Go-\<*D-\">-\<Esc>", "xt")
+  call assert_equal("-foo-", getline('$'))
+  set nomodified
+  iunmap <D-">
 endfunc
 
 func Test_map_super_multibyte()
-  if has('gui_gtk') || has('gui_gtk3') || has("macos")
-    imap <D-á> foo
-    call assert_match('i  <D-á>\s*foo', execute('imap'))
-    iunmap <D-á>
+  if "\<D-j>"[-1:] == '>'
+    throw 'Skipped: <D- modifier not supported'
   endif
+
+  imap <D-á> foo
+  call assert_match('i  <D-á>\s*foo', execute('imap'))
+  iunmap <D-á>
 endfunc
 
 func Test_abbr_after_line_join()
@@ -1668,6 +1672,49 @@ func Test_unmap_simplifiable()
   unmap <C-I>
 endfunc
 
+" Test that the first byte of rhs is not remapped if rhs starts with lhs.
+func Test_map_rhs_starts_with_lhs()
+  new
+  func MapExpr()
+    return "\<C-R>\<C-P>"
+  endfunc
+
+  for expr in [v:false, v:true]
+    if expr
+      imap <buffer><expr> <C-R> MapExpr()
+    else
+      imap <buffer> <C-R> <C-R><C-P>
+    endif
+
+    for restore in [v:false, v:true]
+      if restore
+        let saved = maparg('<C-R>', 'i', v:false, v:true)
+        iunmap <buffer> <C-R>
+        call mapset(saved)
+      endif
+
+      let @a = 'foo'
+      call assert_nobeep('call feedkeys("S\<C-R>a", "tx")')
+      call assert_equal('foo', getline('.'))
+
+      let @a = 'bar'
+      call assert_nobeep('call feedkeys("S\<*C-R>a", "tx")')
+      call assert_equal('bar', getline('.'))
+    endfor
+  endfor
+
+  " When two mappings are used for <C-I> and <Tab>, remapping should work.
+  imap <buffer> <C-I> <Tab>bar
+  imap <buffer> <Tab> foo
+  call feedkeys("S\<Tab>", 'xt')
+  call assert_equal('foo', getline('.'))
+  call feedkeys("S\<*C-I>", 'xt')
+  call assert_equal('foobar', getline('.'))
+
+  delfunc MapExpr
+  bwipe!
+endfunc
+
 func Test_expr_map_escape_special()
   nnoremap … <Cmd>let g:got_ellipsis += 1<CR>
   func Func()
@@ -1693,7 +1740,7 @@ func Test_map_after_timed_out_nop()
     inoremap ab TEST
     inoremap a <Nop>
   END
-  call writefile(lines, 'Xtest_map_after_timed_out_nop')
+  call writefile(lines, 'Xtest_map_after_timed_out_nop', 'D')
   let buf = RunVimInTerminal('-S Xtest_map_after_timed_out_nop', #{rows: 6})
 
   " Enter Insert mode
@@ -1710,7 +1757,49 @@ func Test_map_after_timed_out_nop()
 
   " clean up
   call StopVimInTerminal(buf)
-  call delete('Xtest_map_after_timed_out_nop')
+endfunc
+
+" Test 'showcmd' behavior with a partial mapping
+func Test_showcmd_part_map()
+  CheckRunVimInTerminal
+
+  let lines =<< trim END
+    set notimeout showcmd
+    nnoremap ,a <Ignore>
+    nnoremap ;a <Ignore>
+    nnoremap Àa <Ignore>
+    nnoremap Ëa <Ignore>
+    nnoremap βa <Ignore>
+    nnoremap ωa <Ignore>
+    nnoremap …a <Ignore>
+    nnoremap <C-W>a <Ignore>
+  END
+  call writefile(lines, 'Xtest_showcmd_part_map', 'D')
+  let buf = RunVimInTerminal('-S Xtest_showcmd_part_map', #{rows: 6})
+
+  call term_sendkeys(buf, ":set noruler | echo\<CR>")
+  call WaitForAssert({-> assert_equal('', term_getline(buf, 6))})
+
+  for c in [',', ';', 'À', 'Ë', 'β', 'ω', '…']
+    call term_sendkeys(buf, c)
+    call WaitForAssert({-> assert_equal(c, trim(term_getline(buf, 6)))})
+    call term_sendkeys(buf, 'a')
+    call WaitForAssert({-> assert_equal('', trim(term_getline(buf, 6)))})
+  endfor
+
+  call term_sendkeys(buf, "\<C-W>")
+  call WaitForAssert({-> assert_equal('^W', trim(term_getline(buf, 6)))})
+  call term_sendkeys(buf, 'a')
+  call WaitForAssert({-> assert_equal('', trim(term_getline(buf, 6)))})
+
+  " Use feedkeys() as terminal buffer cannot forward unsimplified Ctrl-W.
+  " This is like typing Ctrl-W with modifyOtherKeys enabled.
+  call term_sendkeys(buf, ':call feedkeys("\<*C-W>", "m")' .. " | echo\<CR>")
+  call WaitForAssert({-> assert_equal('^W', trim(term_getline(buf, 6)))})
+  call term_sendkeys(buf, 'a')
+  call WaitForAssert({-> assert_equal('', trim(term_getline(buf, 6)))})
+
+  call StopVimInTerminal(buf)
 endfunc
 
 func Test_using_past_typeahead()

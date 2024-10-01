@@ -1,20 +1,21 @@
-local helpers = require('test.functional.helpers')(after_each)
+local t = require('test.testutil')
+local n = require('test.functional.testnvim')()
 local Screen = require('test.functional.ui.screen')
 
-local request = helpers.request
-local eq = helpers.eq
-local ok = helpers.ok
-local pcall_err = helpers.pcall_err
-local insert = helpers.insert
-local feed = helpers.feed
-local clear = helpers.clear
-local command = helpers.command
-local exec = helpers.exec
-local api = helpers.api
-local assert_alive = helpers.assert_alive
+local request = n.request
+local eq = t.eq
+local ok = t.ok
+local pcall_err = t.pcall_err
+local insert = n.insert
+local feed = n.feed
+local clear = n.clear
+local command = n.command
+local exec = n.exec
+local api = n.api
+local assert_alive = n.assert_alive
 
 local function expect(contents)
-  return eq(contents, helpers.curbuf_contents())
+  return eq(contents, n.curbuf_contents())
 end
 
 local function set_extmark(ns_id, id, line, col, opts)
@@ -460,7 +461,7 @@ describe('API/extmarks', function()
     -- This shouldn't seg fault
     screen:expect([[
       12345^ 1        |
-      ~              |*8
+      {1:~              }|*8
                      |
     ]])
   end)
@@ -513,7 +514,7 @@ describe('API/extmarks', function()
     insert('abc')
     screen:expect([[
       ab^c12345       |
-      ~              |*8
+      {1:~              }|*8
                      |
     ]])
     local rv = get_extmark_by_id(ns, marks[1])
@@ -1568,7 +1569,7 @@ describe('API/extmarks', function()
       sign_text = '>>',
       spell = true,
       virt_lines = {
-        { { 'lines', 'Macro' }, { '???' } },
+        { { 'lines', 'Macro' }, { '???' }, { ';;;', '' } },
         { { 'stack', { 'Type', 'Search' } }, { '!!!' } },
       },
       virt_lines_above = true,
@@ -1603,7 +1604,7 @@ describe('API/extmarks', function()
         sign_text = '>>',
         spell = true,
         virt_lines = {
-          { { 'lines', 'Macro' }, { '???' } },
+          { { 'lines', 'Macro' }, { '???' }, { ';;;', '' } },
           { { 'stack', { 'Type', 'Search' } }, { '!!!' } },
         },
         virt_lines_above = true,
@@ -1734,16 +1735,17 @@ describe('API/extmarks', function()
     command('d2')
     screen:expect([[
       S2^aaa bbb ccc                           |
-        aaa bbb ccc                           |*3
-                                              |*2
+      {7:  }aaa bbb ccc                           |*3
+      {7:  }                                      |
+                                              |
     ]])
     -- mark is restored with undo_restore == true
     command('silent undo')
     screen:expect([[
-      S1  ^aaa bbb ccc                         |
-      S1S2aaa bbb ccc                         |
-      S2  aaa bbb ccc                         |
-          aaa bbb ccc                         |*2
+      S1{7:  }^aaa bbb ccc                         |
+      S2S1aaa bbb ccc                         |
+      S2{7:  }aaa bbb ccc                         |
+      {7:    }aaa bbb ccc                         |*2
                                               |
     ]])
     -- decor is not removed twice
@@ -1756,13 +1758,13 @@ describe('API/extmarks', function()
     command('1d 2')
     eq(0, #get_extmarks(-1, 0, -1, {}))
     -- mark is not removed when deleting bytes before the range
-    set_extmark(
-      ns,
-      3,
-      0,
-      4,
-      { invalidate = true, undo_restore = false, hl_group = 'Error', end_col = 7 }
-    )
+    set_extmark(ns, 3, 0, 4, {
+      invalidate = true,
+      undo_restore = true,
+      hl_group = 'Error',
+      end_col = 7,
+      right_gravity = false,
+    })
     feed('dw')
     eq(3, get_extmark_by_id(ns, 3, { details = true })[3].end_col)
     -- mark is not removed when deleting bytes at the start of the range
@@ -1776,15 +1778,18 @@ describe('API/extmarks', function()
     eq(1, get_extmark_by_id(ns, 3, { details = true })[3].end_col)
     -- mark is removed when all bytes in the range are deleted
     feed('hx')
-    eq({}, get_extmark_by_id(ns, 3, {}))
+    eq(true, get_extmark_by_id(ns, 3, { details = true })[3].invalid)
+    -- mark is restored with undo_restore == true if pos did not change
+    command('undo')
+    eq(nil, get_extmark_by_id(ns, 3, { details = true })[3].invalid)
     -- multiline mark is not removed when start of its range is deleted
-    set_extmark(
-      ns,
-      4,
-      1,
-      4,
-      { undo_restore = false, invalidate = true, hl_group = 'Error', end_col = 7, end_row = 3 }
-    )
+    set_extmark(ns, 4, 1, 4, {
+      undo_restore = false,
+      invalidate = true,
+      hl_group = 'Error',
+      end_col = 7,
+      end_row = 3,
+    })
     feed('ddDdd')
     eq({ 0, 0 }, get_extmark_by_id(ns, 4, {}))
     -- multiline mark is removed when entirety of its range is deleted
@@ -1793,10 +1798,15 @@ describe('API/extmarks', function()
   end)
 
   it('can set a URL', function()
-    set_extmark(ns, 1, 0, 0, { url = 'https://example.com', end_col = 3 })
+    local url1 = 'https://example.com'
+    local url2 = 'http://127.0.0.1'
+    set_extmark(ns, 1, 0, 0, { url = url1, end_col = 3 })
+    set_extmark(ns, 2, 0, 3, { url = url2, hl_group = 'Search', end_col = 5 })
     local extmarks = get_extmarks(ns, 0, -1, { details = true })
-    eq(1, #extmarks)
-    eq('https://example.com', extmarks[1][4].url)
+    eq(2, #extmarks)
+    eq(url1, extmarks[1][4].url)
+    eq(url2, extmarks[2][4].url)
+    eq('Search', extmarks[2][4].hl_group)
   end)
 
   it('respects priority', function()
@@ -1894,6 +1904,24 @@ describe('Extmarks buffer api with many marks', function()
     end
     eq(ns_marks[ns1], get_marks(ns1))
     eq(ns_marks[ns2], get_marks(ns2))
+
+    api.nvim_buf_clear_namespace(0, ns1, 0, 10)
+    for id, mark in pairs(ns_marks[ns1]) do
+      if mark[1] < 10 then
+        ns_marks[ns1][id] = nil
+      end
+    end
+    eq(ns_marks[ns1], get_marks(ns1))
+    eq(ns_marks[ns2], get_marks(ns2))
+
+    api.nvim_buf_clear_namespace(0, ns1, 20, -1)
+    for id, mark in pairs(ns_marks[ns1]) do
+      if mark[1] >= 20 then
+        ns_marks[ns1][id] = nil
+      end
+    end
+    eq(ns_marks[ns1], get_marks(ns1))
+    eq(ns_marks[ns2], get_marks(ns2))
   end)
 
   it('can delete line', function()
@@ -1964,7 +1992,7 @@ describe('API/win_extmark', function()
       grid = [[
       non ui-watched line |
       ui-watched lin^e     |
-      ~                   |
+      {1:~                   }|
                           |
     ]],
       extmarks = {
@@ -2052,7 +2080,7 @@ describe('API/win_extmark', function()
       grid = [[
       ui-watched linupdat^e|
       e                   |
-      ~                   |
+      {1:~                   }|
                           |
     ]],
       extmarks = {
@@ -2079,9 +2107,9 @@ describe('API/win_extmark', function()
       grid = [[
         ## grid 1
           [4:--------------------]|*3
-          [No Name] [+]       |
+          {3:[No Name] [+]       }|
           [2:--------------------]|*2
-          [No Name] [+]       |
+          {2:[No Name] [+]       }|
           [3:--------------------]|
         ## grid 2
           non ui-watched line |
@@ -2091,7 +2119,7 @@ describe('API/win_extmark', function()
         ## grid 4
           non ui-watched line |
           ui-watched lin^e     |
-          ~                   |
+          {1:~                   }|
     ]],
       extmarks = {
         [2] = {
@@ -2112,13 +2140,13 @@ describe('API/win_extmark', function()
       grid = [[
         ## grid 1
           [4:--------------------]|*3
-          [No Name] [+]       |
+          {3:[No Name] [+]       }|
           [2:--------------------]|*2
-          [No Name] [+]       |
+          {2:[No Name] [+]       }|
           [3:--------------------]|
         ## grid 2
           non ui-watched line |
-          ui-watched linupd@@@|
+          ui-watched linupd{1:@@@}|
         ## grid 3
                               |
         ## grid 4

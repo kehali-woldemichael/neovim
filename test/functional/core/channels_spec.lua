@@ -1,17 +1,19 @@
-local helpers = require('test.functional.helpers')(after_each)
-local clear, eq, eval, next_msg, ok, source =
-  helpers.clear, helpers.eq, helpers.eval, helpers.next_msg, helpers.ok, helpers.source
-local command, fn, api = helpers.command, helpers.fn, helpers.api
+local t = require('test.testutil')
+local n = require('test.functional.testnvim')()
+
+local clear, eq, eval, next_msg, ok, source = n.clear, t.eq, n.eval, n.next_msg, t.ok, n.source
+local command, fn, api = n.command, n.fn, n.api
+local matches = t.matches
 local sleep = vim.uv.sleep
-local spawn, nvim_argv = helpers.spawn, helpers.nvim_argv
-local get_session, set_session = helpers.get_session, helpers.set_session
-local nvim_prog = helpers.nvim_prog
-local is_os = helpers.is_os
-local retry = helpers.retry
-local expect_twostreams = helpers.expect_twostreams
-local assert_alive = helpers.assert_alive
-local pcall_err = helpers.pcall_err
-local skip = helpers.skip
+local spawn, nvim_argv = n.spawn, n.nvim_argv
+local get_session, set_session = n.get_session, n.set_session
+local nvim_prog = n.nvim_prog
+local is_os = t.is_os
+local retry = t.retry
+local expect_twostreams = n.expect_twostreams
+local assert_alive = n.assert_alive
+local pcall_err = t.pcall_err
+local skip = t.skip
 
 describe('channels', function()
   local init = [[
@@ -277,13 +279,44 @@ describe('channels', function()
 
     local _, err =
       pcall(command, "call rpcrequest(id, 'nvim_command', 'call chanclose(v:stderr, \"stdin\")')")
-    ok(string.find(err, 'E906: invalid stream for channel') ~= nil)
+    matches('E906: invalid stream for channel', err)
 
     eq(1, eval("rpcrequest(id, 'nvim_eval', 'chanclose(v:stderr, \"stderr\")')"))
     eq({ 'notification', 'stderr', { 3, { '' } } }, next_msg())
 
     command("call rpcnotify(id, 'nvim_command', 'quit')")
     eq({ 'notification', 'exit', { 3, 0 } }, next_msg())
+  end)
+
+  it('stdio channel works with stdout redirected to file #30509', function()
+    t.write_file(
+      'Xstdio_write.vim',
+      [[
+        let chan = stdioopen({})
+        call chansend(chan, 'foo')
+        call chansend(chan, 'bar')
+        qall!
+      ]]
+    )
+    local fd = assert(vim.uv.fs_open('Xstdio_redir', 'w', 420))
+    local exit_code, exit_signal
+    local handle = vim.uv.spawn(nvim_prog, {
+      args = { '-u', 'NONE', '-i', 'NONE', '--headless', '-S', 'Xstdio_write.vim' },
+      -- Simulate shell redirection: "nvim ... > Xstdio_redir". #30509
+      stdio = { nil, fd, nil },
+    }, function(code, signal)
+      vim.uv.stop()
+      exit_code, exit_signal = code, signal
+    end)
+    finally(function()
+      handle:close()
+      vim.uv.fs_close(fd)
+      os.remove('Xstdio_write.vim')
+      os.remove('Xstdio_redir')
+    end)
+    vim.uv.run('default')
+    eq({ 0, 0 }, { exit_code, exit_signal })
+    eq('foobar', t.read_file('Xstdio_redir'))
   end)
 
   it('can use buffered output mode', function()

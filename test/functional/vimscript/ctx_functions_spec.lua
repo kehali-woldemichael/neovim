@@ -1,19 +1,20 @@
-local helpers = require('test.functional.helpers')(after_each)
+local t = require('test.testutil')
+local n = require('test.functional.testnvim')()
 
-local call = helpers.call
-local clear = helpers.clear
-local command = helpers.command
-local eq = helpers.eq
-local eval = helpers.eval
-local feed = helpers.feed
+local call = n.call
+local clear = n.clear
+local command = n.command
+local eq = t.eq
+local eval = n.eval
+local feed = n.feed
 local map = vim.tbl_map
-local api = helpers.api
-local parse_context = helpers.parse_context
-local exec_capture = helpers.exec_capture
-local source = helpers.source
+local api = n.api
+local parse_context = n.parse_context
+local exec_capture = n.exec_capture
+local source = n.source
 local trim = vim.trim
-local write_file = helpers.write_file
-local pcall_err = helpers.pcall_err
+local write_file = t.write_file
+local pcall_err = t.pcall_err
 
 describe('context functions', function()
   local fname1 = 'Xtest-functional-eval-ctx1'
@@ -294,7 +295,7 @@ describe('context functions', function()
       eq(outofbounds, pcall_err(call, 'ctxget', 0))
     end)
 
-    it('returns context dictionary at index in context stack', function()
+    it('returns context dict at index in context stack', function()
       feed('i1<cr>2<cr>3<c-[>ddddddqahjklq')
       command('edit! ' .. fname1)
       feed('G')
@@ -403,7 +404,7 @@ describe('context functions', function()
       eq(outofbounds, pcall_err(call, 'ctxset', { dummy = 1 }, 0))
     end)
 
-    it('errors when context dictionary is invalid', function()
+    it('errors when context dict is invalid', function()
       call('ctxpush')
       eq(
         'Vim:E474: Failed to convert list to msgpack string buffer',
@@ -411,7 +412,7 @@ describe('context functions', function()
       )
     end)
 
-    it('sets context dictionary at index in context stack', function()
+    it('sets context dict at index in context stack', function()
       api.nvim_set_var('one', 1)
       api.nvim_set_var('Two', 2)
       api.nvim_set_var('THREE', 3)

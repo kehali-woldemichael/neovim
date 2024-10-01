@@ -1,15 +1,16 @@
-local helpers = require('test.functional.helpers')(after_each)
+local t = require('test.testutil')
+local n = require('test.functional.testnvim')()
 local Screen = require('test.functional.ui.screen')
 
-local feed = helpers.feed
-local eq = helpers.eq
-local clear = helpers.clear
-local fn = helpers.fn
-local command = helpers.command
-local exc_exec = helpers.exc_exec
-local write_file = helpers.write_file
-local api = helpers.api
-local source = helpers.source
+local feed = n.feed
+local eq = t.eq
+local clear = n.clear
+local fn = n.fn
+local command = n.command
+local exc_exec = n.exc_exec
+local write_file = t.write_file
+local api = n.api
+local source = n.source
 
 local file_base = 'Xtest-functional-ex_cmds-quickfix_commands'
 
@@ -184,6 +185,9 @@ describe('quickfix', function()
   it('BufAdd does not cause E16 when reusing quickfix buffer #18135', function()
     local file = file_base .. '_reuse_qfbuf_BufAdd'
     write_file(file, ('\n'):rep(100) .. 'foo')
+    finally(function()
+      os.remove(file)
+    end)
     source([[
       set grepprg=internal
       autocmd BufAdd * call and(0, 0)
@@ -191,7 +195,24 @@ describe('quickfix', function()
     ]])
     command('grep foo ' .. file)
     command('grep foo ' .. file)
-    os.remove(file)
+  end)
+
+  it('jump message does not scroll with cmdheight=0 and shm+=O #29597', function()
+    local screen = Screen.new(40, 6)
+    screen:attach()
+    command('set cmdheight=0')
+    local file = file_base .. '_reuse_qfbuf_BufAdd'
+    write_file(file, 'foobar')
+    finally(function()
+      os.remove(file)
+    end)
+    command('vimgrep /foo/gj ' .. file)
+    feed(':cc<CR>')
+    screen:expect([[
+      ^foobar                                  |
+      {1:~                                       }|*4
+      (1 of 1): foobar                        |
+    ]])
   end)
 end)
 

@@ -20,6 +20,7 @@ error('Cannot require a meta file')
 ---@field descendant_for_range fun(self: TSNode, start_row: integer, start_col: integer, end_row: integer, end_col: integer): TSNode?
 ---@field named_descendant_for_range fun(self: TSNode, start_row: integer, start_col: integer, end_row: integer, end_col: integer): TSNode?
 ---@field parent fun(self: TSNode): TSNode?
+---@field child_containing_descendant fun(self: TSNode, descendant: TSNode): TSNode?
 ---@field next_sibling fun(self: TSNode): TSNode?
 ---@field prev_sibling fun(self: TSNode): TSNode?
 ---@field next_named_sibling fun(self: TSNode): TSNode?
@@ -32,29 +33,13 @@ error('Cannot require a meta file')
 ---@field iter_children fun(self: TSNode): fun(): TSNode, string
 ---@field field fun(self: TSNode, name: string): TSNode[]
 ---@field byte_length fun(self: TSNode): integer
+---@field __has_ancestor fun(self: TSNode, node_types: string[]): boolean
 local TSNode = {}
-
----@param query TSQuery
----@param captures true
----@param start? integer
----@param end_? integer
----@param opts? table
----@return fun(): integer, TSNode, TSMatch
-function TSNode:_rawquery(query, captures, start, end_, opts) end
-
----@param query TSQuery
----@param captures false
----@param start? integer
----@param end_? integer
----@param opts? table
----@return fun(): integer, TSMatch
-function TSNode:_rawquery(query, captures, start, end_, opts) end
 
 ---@alias TSLoggerCallback fun(logtype: 'parse'|'lex', msg: string)
 
 ---@class TSParser: userdata
----@field parse fun(self: TSParser, tree: TSTree?, source: integer|string, include_bytes: true): TSTree, Range6[]
----@field parse fun(self: TSParser, tree: TSTree?, source: integer|string, include_bytes: false|nil): TSTree, Range4[]
+---@field parse fun(self: TSParser, tree: TSTree?, source: integer|string, include_bytes: boolean): TSTree, (Range4|Range6)[]
 ---@field reset fun(self: TSParser)
 ---@field included_ranges fun(self: TSParser, include_bytes: boolean?): integer[]
 ---@field set_included_ranges fun(self: TSParser, ranges: (Range6|TSNode)[])
@@ -77,8 +62,21 @@ function TSNode:_rawquery(query, captures, start, end_, opts) end
 ---@field captures string[]
 ---@field patterns table<integer, (integer|string)[][]>
 
+--- @param lang string
+--- @return table
+vim._ts_inspect_language = function(lang) end
+
 ---@return integer
 vim._ts_get_language_version = function() end
+
+--- @param path string
+--- @param lang string
+--- @param symbol_name? string
+vim._ts_add_language_from_object = function(path, lang, symbol_name) end
+
+--- @param path string
+--- @param lang string
+vim._ts_add_language_from_wasm = function(path, lang) end
 
 ---@return integer
 vim._ts_get_minimum_language_version = function() end
@@ -91,3 +89,31 @@ vim._ts_parse_query = function(lang, query) end
 ---@param lang string
 ---@return TSParser
 vim._create_ts_parser = function(lang) end
+
+--- @class TSQueryMatch: userdata
+--- @field captures fun(self: TSQueryMatch): table<integer,TSNode[]>
+local TSQueryMatch = {}
+
+--- @return integer match_id
+--- @return integer pattern_index
+function TSQueryMatch:info() end
+
+--- @class TSQueryCursor: userdata
+--- @field remove_match fun(self: TSQueryCursor, id: integer)
+local TSQueryCursor = {}
+
+--- @return integer capture
+--- @return TSNode captured_node
+--- @return TSQueryMatch match
+function TSQueryCursor:next_capture() end
+
+--- @return TSQueryMatch match
+function TSQueryCursor:next_match() end
+
+--- @param node TSNode
+--- @param query TSQuery
+--- @param start integer?
+--- @param stop integer?
+--- @param opts? { max_start_depth?: integer, match_limit?: integer}
+--- @return TSQueryCursor
+function vim._create_ts_querycursor(node, query, start, stop, opts) end

@@ -1,13 +1,13 @@
-local helpers = require('test.functional.helpers')(after_each)
-local clear = helpers.clear
-local exec_lua = helpers.exec_lua
-local eq = helpers.eq
+local t = require('test.testutil')
+local n = require('test.functional.testnvim')()
+
+local clear = n.clear
+local exec_lua = n.exec_lua
+local eq = t.eq
 
 local function system_sync(cmd, opts)
-  return exec_lua(
-    [[
-    local cmd, opts = ...
-    local obj = vim.system(...)
+  return exec_lua(function()
+    local obj = vim.system(cmd, opts)
 
     if opts.timeout then
       -- Minor delay before calling wait() so the timeout uv timer can have a headstart over the
@@ -22,16 +22,11 @@ local function system_sync(cmd, opts)
     assert(not proc, 'process still exists')
 
     return res
-  ]],
-    cmd,
-    opts
-  )
+  end)
 end
 
 local function system_async(cmd, opts)
-  return exec_lua(
-    [[
-    local cmd, opts = ...
+  return exec_lua(function()
     _G.done = false
     local obj = vim.system(cmd, opts, function(obj)
       _G.done = true
@@ -49,10 +44,7 @@ local function system_async(cmd, opts)
     assert(not proc, 'process still exists')
 
     return _G.ret
-  ]],
-    cmd,
-    opts
-  )
+  end)
 end
 
 describe('vim.system', function()
@@ -82,7 +74,7 @@ describe('vim.system', function()
   end
 
   it('kill processes', function()
-    exec_lua([[
+    exec_lua(function()
       local signal
       local cmd = vim.system({ 'cat', '-' }, { stdin = true }, function(r)
         signal = r.signal
@@ -102,19 +94,21 @@ describe('vim.system', function()
       assert(not proc, 'process still exists')
 
       assert(signal == 2)
-    ]])
+    end)
   end)
 
   it('SystemObj:wait() does not process non-fast events #27292', function()
     eq(
       false,
-      exec_lua([[
+      exec_lua(function()
         _G.processed = false
         local cmd = vim.system({ 'sleep', '1' })
-        vim.schedule(function() _G.processed = true end)
+        vim.schedule(function()
+          _G.processed = true
+        end)
         cmd:wait()
         return _G.processed
-      ]])
+      end)
     )
     eq(true, exec_lua([[return _G.processed]]))
   end)

@@ -1,7 +1,10 @@
-local helpers = require('test.functional.helpers')(after_each)
+local t = require('test.testutil')
+local n = require('test.functional.testnvim')()
 local Screen = require('test.functional.ui.screen')
-local api, clear, eq = helpers.api, helpers.clear, helpers.eq
-local eval, exec, feed = helpers.eval, helpers.exec, helpers.feed
+
+local api, clear, eq = n.api, n.clear, t.eq
+local eval, exec, feed = n.eval, n.exec, n.feed
+local exec_lua = n.exec_lua
 
 describe('Signs', function()
   local screen
@@ -205,7 +208,7 @@ describe('Signs', function()
       screen:expect([[
         {2:    }{6:  1 }a                                            |
         {2:    }{6:  2 }b                                            |
-        {1:>>}WW{6:  3 }c                                            |
+        WW{1:>>}{6:  3 }c                                            |
         {2:    }{6:  4 }^                                             |
         {0:~                                                    }|*9
                                                              |
@@ -218,9 +221,9 @@ describe('Signs', function()
         sign place 3 line=2 name=pietError buffer=1
       ]])
       screen:expect([[
-        {1:>>}{8:XX}{6:  1 }a                                            |
-        {8:XX}{1:>>}{6:  2 }b                                            |
-        {1:>>}WW{6:  3 }c                                            |
+        {8:XX}{1:>>}{6:  1 }a                                            |
+        {1:>>}{8:XX}{6:  2 }b                                            |
+        WW{1:>>}{6:  3 }c                                            |
         {2:    }{6:  4 }^                                             |
         {0:~                                                    }|*9
                                                              |
@@ -238,9 +241,9 @@ describe('Signs', function()
       -- "auto:3" accommodates all the signs we defined so far.
       exec('set signcolumn=auto:3')
       local s3 = [[
-        {1:>>}{8:XX}{2:  }{6:  1 }a                                          |
-        {8:XX}{1:>>}{2:  }{6:  2 }b                                          |
-        {8:XX}{1:>>}WW{6:  3 }c                                          |
+        {8:XX}{1:>>}{2:  }{6:  1 }a                                          |
+        {1:>>}{8:XX}{2:  }{6:  2 }b                                          |
+        WW{1:>>}{8:XX}{6:  3 }c                                          |
         {2:      }{6:  4 }^                                           |
         {0:~                                                    }|*9
                                                              |
@@ -249,9 +252,9 @@ describe('Signs', function()
       -- Check "yes:9".
       exec('set signcolumn=yes:9')
       screen:expect([[
-        {1:>>}{8:XX}{2:              }{6:  1 }a                              |
-        {8:XX}{1:>>}{2:              }{6:  2 }b                              |
-        {8:XX}{1:>>}WW{2:            }{6:  3 }c                              |
+        {8:XX}{1:>>}{2:              }{6:  1 }a                              |
+        {1:>>}{8:XX}{2:              }{6:  2 }b                              |
+        WW{1:>>}{8:XX}{2:            }{6:  3 }c                              |
         {2:                  }{6:  4 }^                               |
         {0:~                                                    }|*9
                                                              |
@@ -264,8 +267,8 @@ describe('Signs', function()
       exec('3move1')
       exec('2d')
       screen:expect([[
-        {1:>>}{8:XX}{6:  1 }a                                            |
-        {8:XX}{1:>>}{6:  2 }^b                                            |
+        {8:XX}{1:>>}{6:  1 }a                                            |
+        {1:>>}{8:XX}{6:  2 }^b                                            |
         {2:    }{6:  3 }                                             |
         {0:~                                                    }|*10
                                                              |
@@ -273,8 +276,8 @@ describe('Signs', function()
       -- character deletion does not delete signs.
       feed('x')
       screen:expect([[
-        {1:>>}{8:XX}{6:  1 }a                                            |
-        {8:XX}{1:>>}{6:  2 }^                                             |
+        {8:XX}{1:>>}{6:  1 }a                                            |
+        {1:>>}{8:XX}{6:  2 }^                                             |
         {2:    }{6:  3 }                                             |
         {0:~                                                    }|*10
                                                              |
@@ -574,5 +577,46 @@ describe('Signs', function()
       call sign_undefine()
     ]])
     eq({}, eval('sign_getdefined()'))
+  end)
+
+  it('no crash when unplacing signs beyond end of buffer', function()
+    exec([[
+      sign define S1 text=S1
+      sign define S2 text=S2
+      sign place 1 line=8 name=S1
+      sign place 2 line=9 name=S2
+    ]])
+    -- Now placed at end of buffer
+    local s1 = {
+      grid = [[
+        S2^                                                   |
+        {0:~                                                    }|*12
+                                                             |
+      ]],
+    }
+    screen:expect(s1)
+    -- Signcolumn tracking used to not count signs placed beyond end of buffer here
+    exec('set signcolumn=auto:9')
+    screen:expect({
+      grid = [[
+        S2S1^                                                 |
+        {0:~                                                    }|*12
+                                                             |
+      ]],
+    })
+    -- Unplacing the sign does not crash by decrementing tracked signs below zero
+    exec('sign unplace 1')
+    screen:expect(s1)
+  end)
+
+  it('signcolumn width is set immediately after splitting window #30547', function()
+    local infos = exec_lua([[
+      vim.o.number = true
+      vim.o.signcolumn = 'yes'
+      vim.cmd.wincmd('v')
+      return vim.fn.getwininfo()
+    ]])
+    eq(6, infos[1].textoff)
+    eq(6, infos[2].textoff)
   end)
 end)

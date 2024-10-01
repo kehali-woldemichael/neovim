@@ -1,15 +1,16 @@
-local helpers = require('test.functional.helpers')(after_each)
+local t = require('test.testutil')
+local n = require('test.functional.testnvim')()
 local Screen = require('test.functional.ui.screen')
 
-local clear = helpers.clear
-local command = helpers.command
-local dedent = helpers.dedent
-local eq = helpers.eq
-local fn = helpers.fn
-local feed = helpers.feed
-local exec_capture = helpers.exec_capture
-local write_file = helpers.write_file
-local api = helpers.api
+local clear = n.clear
+local command = n.command
+local dedent = t.dedent
+local eq = t.eq
+local fn = n.fn
+local feed = n.feed
+local exec_capture = n.exec_capture
+local write_file = t.write_file
+local api = n.api
 
 describe('jumplist', function()
   local fname1 = 'Xtest-functional-normal-jump'
@@ -193,7 +194,7 @@ describe("jumpoptions=stack behaves like 'tagstack'", function()
   end)
 end)
 
-describe('buffer deletion', function()
+describe('buffer deletion with jumpoptions+=clean', function()
   local base_file = 'Xtest-functional-buffer-deletion'
   local file1 = base_file .. '1'
   local file2 = base_file .. '2'
@@ -224,6 +225,12 @@ describe('buffer deletion', function()
     command('edit ' .. file1)
     command('edit ' .. file2)
     command('edit ' .. file3)
+  end)
+
+  after_each(function()
+    os.remove(file1)
+    os.remove(file2)
+    os.remove(file3)
   end)
 
   it('deletes jump list entries when the current buffer is deleted', function()
@@ -315,6 +322,44 @@ describe('buffer deletion', function()
          1     1    0 {file3}]]),
       exec_capture('jumps')
     )
+  end)
+end)
+
+describe('buffer deletion with jumpoptions-=clean', function()
+  local base_file = 'Xtest-functional-buffer-deletion'
+  local file1 = base_file .. '1'
+  local file2 = base_file .. '2'
+  local base_content = 'text'
+  local content1 = base_content .. '1'
+  local content2 = base_content .. '2'
+
+  before_each(function()
+    clear()
+    command('clearjumps')
+    command('set jumpoptions-=clean')
+
+    write_file(file1, content1, false, false)
+    write_file(file2, content2, false, false)
+
+    command('edit ' .. file1)
+    command('edit ' .. file2)
+  end)
+
+  after_each(function()
+    os.remove(file1)
+    os.remove(file2)
+  end)
+
+  it('Ctrl-O reopens previous buffer with :bunload or :bdelete #28968', function()
+    eq(file2, fn.bufname(''))
+    command('bunload')
+    eq(file1, fn.bufname(''))
+    feed('<C-O>')
+    eq(file2, fn.bufname(''))
+    command('bdelete')
+    eq(file1, fn.bufname(''))
+    feed('<C-O>')
+    eq(file2, fn.bufname(''))
   end)
 end)
 

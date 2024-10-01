@@ -1,8 +1,9 @@
 -- Tests for :setlocal and :setglobal
 
-local helpers = require('test.functional.helpers')(after_each)
-local clear, feed_command, eval, eq, api =
-  helpers.clear, helpers.feed_command, helpers.eval, helpers.eq, helpers.api
+local t = require('test.testutil')
+local n = require('test.functional.testnvim')()
+
+local clear, feed_command, eval, eq, api = n.clear, n.feed_command, n.eval, t.eq, n.api
 
 local function should_fail(opt, value, errmsg)
   feed_command('setglobal ' .. opt .. '=' .. value)
@@ -12,7 +13,7 @@ local function should_fail(opt, value, errmsg)
   eq(errmsg, eval('v:errmsg'):match('E%d*'))
   feed_command('let v:errmsg = ""')
   local status, err = pcall(api.nvim_set_option_value, opt, value, {})
-  eq(status, false)
+  eq(false, status)
   eq(errmsg, err:match('E%d*'))
   eq('', eval('v:errmsg'))
 end

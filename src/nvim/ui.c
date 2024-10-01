@@ -53,7 +53,7 @@ typedef struct {
 
 #define MAX_UI_COUNT 16
 
-static UI *uis[MAX_UI_COUNT];
+static RemoteUI *uis[MAX_UI_COUNT];
 static bool ui_ext[kUIExtCount] = { 0 };
 static size_t ui_count = 0;
 static int ui_mode_idx = SHAPE_IDX_N;
@@ -70,8 +70,6 @@ bool ui_cb_ext[kUIExtCount];  ///< Internalized UI capabilities.
 static bool has_mouse = false;
 static int pending_has_mouse = -1;
 static bool pending_default_colors = false;
-
-static Array call_buf = ARRAY_DICT_INIT;
 
 #ifdef NVIM_LOG_DEBUG
 static size_t uilog_seen = 0;
@@ -108,7 +106,7 @@ static void ui_log(const char *funname)
   do { \
     bool any_call = false; \
     for (size_t i = 0; i < ui_count; i++) { \
-      UI *ui = uis[i]; \
+      RemoteUI *ui = uis[i]; \
       if ((cond)) { \
         remote_ui_##funname(__VA_ARGS__); \
         any_call = true; \
@@ -128,14 +126,11 @@ void ui_init(void)
   default_grid.handle = 1;
   msg_grid_adj.target = &default_grid;
   ui_comp_init();
-  kv_ensure_space(call_buf, 16);
 }
 
 #ifdef EXITFREE
 void ui_free_all_mem(void)
 {
-  kv_destroy(call_buf);
-
   UIEventCallback *event_cb;
   map_foreach_value(&ui_event_cbs, event_cb, {
     free_ui_event_callback(event_cb);
@@ -149,11 +144,15 @@ void ui_free_all_mem(void)
 /// Returns true if any `rgb=true` UI is attached.
 bool ui_rgb_attached(void)
 {
-  if (!headless_mode && p_tgc) {
+  if (p_tgc) {
     return true;
   }
   for (size_t i = 0; i < ui_count; i++) {
-    if (uis[i]->rgb) {
+    // We do not consider the TUI in this loop because we already checked for 'termguicolors' at the
+    // beginning of this function. In this loop, we are checking to see if any _other_ UIs which
+    // support RGB are attached.
+    bool tui = uis[i]->stdin_tty || uis[i]->stdout_tty;
+    if (!tui && uis[i]->rgb) {
       return true;
     }
   }
@@ -183,9 +182,10 @@ bool ui_override(void)
   return false;
 }
 
-bool ui_active(void)
+/// Gets the number of UIs connected to this server.
+size_t ui_active(void)
 {
-  return ui_count > 0;
+  return ui_count;
 }
 
 void ui_refresh(void)
@@ -194,25 +194,14 @@ void ui_refresh(void)
     abort();
   }
 
-  if (!ui_active()) {
-    return;
-  }
-
-  if (updating_screen) {
-    ui_schedule_refresh();
-    return;
-  }
-
   int width = INT_MAX;
   int height = INT_MAX;
   bool ext_widgets[kUIExtCount];
-  for (UIExtension i = 0; (int)i < kUIExtCount; i++) {
-    ext_widgets[i] = true;
-  }
-
   bool inclusive = ui_override();
+  memset(ext_widgets, !!ui_active(), ARRAY_SIZE(ext_widgets));
+
   for (size_t i = 0; i < ui_count; i++) {
-    UI *ui = uis[i];
+    RemoteUI *ui = uis[i];
     width = MIN(ui->width, width);
     height = MIN(ui->height, height);
     for (UIExtension j = 0; (int)j < kUIExtCount; j++) {
@@ -227,11 +216,27 @@ void ui_refresh(void)
     if (i < kUIGlobalCount) {
       ext_widgets[i] |= ui_cb_ext[i];
     }
+    // Set 'cmdheight' to zero for all tabpages when ext_messages becomes active.
+    if (i == kUIMessages && !ui_ext[i] && ext_widgets[i]) {
+      set_option_value(kOptCmdheight, NUMBER_OPTVAL(0), 0);
+      command_height();
+      FOR_ALL_TABS(tp) {
+        tp->tp_ch_used = 0;
+      }
+    }
     ui_ext[i] = ext_widgets[i];
     if (i < kUIGlobalCount) {
-      ui_call_option_set(cstr_as_string(ui_ext_names[i]),
-                         BOOLEAN_OBJ(ext_widgets[i]));
+      ui_call_option_set(cstr_as_string(ui_ext_names[i]), BOOLEAN_OBJ(ext_widgets[i]));
     }
+  }
+
+  if (!ui_active()) {
+    return;
+  }
+
+  if (updating_screen) {
+    ui_schedule_refresh();
+    return;
   }
 
   ui_default_colors_set();
@@ -241,10 +246,6 @@ void ui_refresh(void)
   screen_resize(width, height);
   p_lz = save_p_lz;
 
-  if (ext_widgets[kUIMessages]) {
-    set_option_value(kOptCmdheight, NUMBER_OPTVAL(0), 0);
-    command_height();
-  }
   ui_mode_info_set();
   pending_mode_update = true;
   ui_cursor_shape();
@@ -367,12 +368,11 @@ void vim_beep(unsigned val)
 void do_autocmd_uienter_all(void)
 {
   for (size_t i = 0; i < ui_count; i++) {
-    UIData *data = uis[i]->data;
-    do_autocmd_uienter(data->channel_id, true);
+    do_autocmd_uienter(uis[i]->channel_id, true);
   }
 }
 
-void ui_attach_impl(UI *ui, uint64_t chanid)
+void ui_attach_impl(RemoteUI *ui, uint64_t chanid)
 {
   if (ui_count == MAX_UI_COUNT) {
     abort();
@@ -408,7 +408,7 @@ void ui_attach_impl(UI *ui, uint64_t chanid)
   do_autocmd_uienter(chanid, true);
 }
 
-void ui_detach_impl(UI *ui, uint64_t chanid)
+void ui_detach_impl(RemoteUI *ui, uint64_t chanid)
 {
   size_t shift_index = MAX_UI_COUNT;
 
@@ -444,7 +444,7 @@ void ui_detach_impl(UI *ui, uint64_t chanid)
   do_autocmd_uienter(chanid, false);
 }
 
-void ui_set_ext_option(UI *ui, UIExtension ext, bool active)
+void ui_set_ext_option(RemoteUI *ui, UIExtension ext, bool active)
 {
   if (ext < kUIGlobalCount) {
     ui_refresh();
@@ -625,7 +625,7 @@ void ui_check_mouse(void)
 /// Check if current mode has changed.
 ///
 /// May update the shape of the cursor.
-void ui_cursor_shape(void)
+void ui_cursor_shape_no_check_conceal(void)
 {
   if (!full_screen) {
     return;
@@ -636,6 +636,15 @@ void ui_cursor_shape(void)
     ui_mode_idx = new_mode_idx;
     pending_mode_update = true;
   }
+}
+
+/// Check if current mode has changed.
+///
+/// May update the shape of the cursor.
+/// With concealing on, may conceal or unconceal the cursor line.
+void ui_cursor_shape(void)
+{
+  ui_cursor_shape_no_check_conceal();
   conceal_check_cursor_line();
 }
 
@@ -649,8 +658,8 @@ Array ui_array(Arena *arena)
 {
   Array all_uis = arena_array(arena, ui_count);
   for (size_t i = 0; i < ui_count; i++) {
-    UI *ui = uis[i];
-    Dictionary info = arena_dict(arena, 10 + kUIExtCount);
+    RemoteUI *ui = uis[i];
+    Dict info = arena_dict(arena, 10 + kUIExtCount);
     PUT_C(info, "width", INTEGER_OBJ(ui->width));
     PUT_C(info, "height", INTEGER_OBJ(ui->height));
     PUT_C(info, "rgb", BOOLEAN_OBJ(ui->rgb));
@@ -671,9 +680,9 @@ Array ui_array(Arena *arena)
         PUT_C(info, (char *)ui_ext_names[j], BOOLEAN_OBJ(ui->ui_ext[j]));
       }
     }
-    PUT_C(info, "chan", INTEGER_OBJ((Integer)ui->data->channel_id));
+    PUT_C(info, "chan", INTEGER_OBJ((Integer)ui->channel_id));
 
-    ADD_C(all_uis, DICTIONARY_OBJ(info));
+    ADD_C(all_uis, DICT_OBJ(info));
   }
   return all_uis;
 }
@@ -711,11 +720,14 @@ void ui_call_event(char *name, Array args)
   map_foreach_value(&ui_event_cbs, event_cb, {
     Error err = ERROR_INIT;
     Object res = nlua_call_ref(event_cb->cb, name, args, kRetNilBool, NULL, &err);
+    // TODO(bfredl/luukvbaal): should this be documented or reconsidered?
+    // Why does truthy return from Lua callback mean remote UI should not receive
+    // the event.
     if (LUARET_TRUTHY(res)) {
       handled = true;
     }
     if (ERROR_SET(&err)) {
-      ELOG("Error while executing ui_comp_event callback: %s", err.msg);
+      ELOG("Error executing UI event callback: %s", err.msg);
     }
     api_clear_error(&err);
   })

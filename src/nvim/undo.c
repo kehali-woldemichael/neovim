@@ -92,6 +92,7 @@
 #include "nvim/decoration.h"
 #include "nvim/drawscreen.h"
 #include "nvim/edit.h"
+#include "nvim/errors.h"
 #include "nvim/eval/funcs.h"
 #include "nvim/eval/typval.h"
 #include "nvim/ex_cmds_defs.h"
@@ -342,8 +343,7 @@ static OptInt get_undolevel(buf_T *buf)
 static inline void zero_fmark_additional_data(fmark_T *fmarks)
 {
   for (size_t i = 0; i < NMARKS; i++) {
-    tv_dict_unref(fmarks[i].additional_data);
-    fmarks[i].additional_data = NULL;
+    XFREE_CLEAR(fmarks[i].additional_data);
   }
 }
 
@@ -477,7 +477,7 @@ int u_savecommon(buf_T *buf, linenr_T top, linenr_T bot, linenr_T newbot, bool r
     uhp->uh_entry = NULL;
     uhp->uh_getbot_entry = NULL;
     uhp->uh_cursor = curwin->w_cursor;          // save cursor pos. for undo
-    if (virtual_active() && curwin->w_cursor.coladd > 0) {
+    if (virtual_active(curwin) && curwin->w_cursor.coladd > 0) {
       uhp->uh_cursor_vcol = getviscol();
     } else {
       uhp->uh_cursor_vcol = -1;
@@ -1131,17 +1131,11 @@ static void serialize_pos(bufinfo_T *bi, pos_T pos)
 static void unserialize_pos(bufinfo_T *bi, pos_T *pos)
 {
   pos->lnum = undo_read_4c(bi);
-  if (pos->lnum < 0) {
-    pos->lnum = 0;
-  }
+  pos->lnum = MAX(pos->lnum, 0);
   pos->col = undo_read_4c(bi);
-  if (pos->col < 0) {
-    pos->col = 0;
-  }
+  pos->col = MAX(pos->col, 0);
   pos->coladd = undo_read_4c(bi);
-  if (pos->coladd < 0) {
-    pos->coladd = 0;
-  }
+  pos->coladd = MAX(pos->coladd, 0);
 }
 
 /// Serializes "info".
@@ -1208,14 +1202,12 @@ void u_write_undo(const char *const name, const bool forceit, buf_T *const buf, 
   // Strip any sticky and executable bits.
   perm = perm & 0666;
 
-  int fd;
-
   // If the undo file already exists, verify that it actually is an undo
   // file, and delete it.
   if (os_path_exists(file_name)) {
     if (name == NULL || !forceit) {
       // Check we can read it and it's an undo file.
-      fd = os_open(file_name, O_RDONLY, 0);
+      int fd = os_open(file_name, O_RDONLY, 0);
       if (fd < 0) {
         if (name != NULL || p_verbose > 0) {
           if (name == NULL) {
@@ -1260,7 +1252,7 @@ void u_write_undo(const char *const name, const bool forceit, buf_T *const buf, 
     goto theend;
   }
 
-  fd = os_open(file_name, O_CREAT|O_WRONLY|O_EXCL|O_NOFOLLOW, perm);
+  int fd = os_open(file_name, O_CREAT|O_WRONLY|O_EXCL|O_NOFOLLOW, perm);
   if (fd < 0) {
     semsg(_(e_not_open), file_name);
     goto theend;
@@ -2000,9 +1992,7 @@ void undo_time(int step, bool sec, bool file, bool absolute)
       target = curbuf->b_u_seq_cur + step;
     }
     if (step < 0) {
-      if (target < 0) {
-        target = 0;
-      }
+      target = MAX(target, 0);
       closest = -1;
     } else {
       if (dosec) {
@@ -2395,9 +2385,7 @@ static void u_undoredo(bool undo, bool do_buf_event)
     }
 
     // Set the '[ mark.
-    if (top + 1 < curbuf->b_op_start.lnum) {
-      curbuf->b_op_start.lnum = top + 1;
-    }
+    curbuf->b_op_start.lnum = MIN(curbuf->b_op_start.lnum, top + 1);
     // Set the '] mark.
     if (newsize == 0 && top + 1 > curbuf->b_op_end.lnum) {
       curbuf->b_op_end.lnum = top + 1;
@@ -2418,12 +2406,8 @@ static void u_undoredo(bool undo, bool do_buf_event)
   }
 
   // Ensure the '[ and '] marks are within bounds.
-  if (curbuf->b_op_start.lnum > curbuf->b_ml.ml_line_count) {
-    curbuf->b_op_start.lnum = curbuf->b_ml.ml_line_count;
-  }
-  if (curbuf->b_op_end.lnum > curbuf->b_ml.ml_line_count) {
-    curbuf->b_op_end.lnum = curbuf->b_ml.ml_line_count;
-  }
+  curbuf->b_op_start.lnum = MIN(curbuf->b_op_start.lnum, curbuf->b_ml.ml_line_count);
+  curbuf->b_op_end.lnum = MIN(curbuf->b_op_end.lnum, curbuf->b_ml.ml_line_count);
 
   // Adjust Extmarks
   if (undo) {
@@ -2488,8 +2472,8 @@ static void u_undoredo(bool undo, bool do_buf_event)
   if (curwin->w_cursor.lnum <= curbuf->b_ml.ml_line_count) {
     if (curhead->uh_cursor.lnum == curwin->w_cursor.lnum) {
       curwin->w_cursor.col = curhead->uh_cursor.col;
-      if (virtual_active() && curhead->uh_cursor_vcol >= 0) {
-        coladvance(curhead->uh_cursor_vcol);
+      if (virtual_active(curwin) && curhead->uh_cursor_vcol >= 0) {
+        coladvance(curwin, curhead->uh_cursor_vcol);
       } else {
         curwin->w_cursor.coladd = 0;
       }
@@ -2506,7 +2490,7 @@ static void u_undoredo(bool undo, bool do_buf_event)
   }
 
   // Make sure the cursor is on an existing line and column.
-  check_cursor();
+  check_cursor(curwin);
 
   // Remember where we are for "g-" and ":earlier 10s".
   curbuf->b_u_seq_cur = curhead->uh_seq;
@@ -3073,7 +3057,7 @@ void u_undoline(void)
   }
   curwin->w_cursor.col = t;
   curwin->w_cursor.lnum = curbuf->b_u_line_lnum;
-  check_cursor_col();
+  check_cursor_col(curwin);
 }
 
 /// Allocate memory and copy curbuf line into it.

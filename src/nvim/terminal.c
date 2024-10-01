@@ -40,8 +40,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <vterm.h>
-#include <vterm_keycodes.h>
 
 #include "klib/kvec.h"
 #include "nvim/api/private/helpers.h"
@@ -94,6 +92,8 @@
 #include "nvim/ui.h"
 #include "nvim/vim_defs.h"
 #include "nvim/window.h"
+#include "vterm/vterm.h"
+#include "vterm/vterm_keycodes.h"
 
 typedef struct {
   VimState state;
@@ -112,6 +112,9 @@ typedef struct {
 // libvterm. Improves performance when receiving large bursts of data.
 #define REFRESH_DELAY 10
 
+#define TEXTBUF_SIZE      0x1fff
+#define SELECTIONBUF_SIZE 0x0400
+
 static TimeWatcher refresh_timer;
 static bool refresh_pending = false;
 
@@ -127,7 +130,7 @@ struct terminal {
   // buffer used to:
   //  - convert VTermScreen cell arrays into utf8 strings
   //  - receive data from libvterm as a result of key presses.
-  char textbuf[0x1fff];
+  char textbuf[TEXTBUF_SIZE];
 
   ScrollbackLine **sb_buffer;       // Scrollback storage.
   size_t sb_current;                // Lines stored in sb_buffer.
@@ -163,6 +166,12 @@ struct terminal {
 
   bool color_set[16];
 
+  // When there is a pending TermRequest autocommand, block and store input.
+  StringBuilder *pending_send;
+
+  char *selection_buffer;  /// libvterm selection buffer
+  StringBuilder selection;  /// Growable array containing full selection data
+
   size_t refcount;                  // reference count
 };
 
@@ -176,45 +185,133 @@ static VTermScreenCallbacks vterm_screen_callbacks = {
   .sb_popline = term_sb_pop,
 };
 
+static VTermSelectionCallbacks vterm_selection_callbacks = {
+  .set = term_selection_set,
+  // For security reasons we don't support querying the system clipboard from the embedded terminal
+  .query = NULL,
+};
+
 static Set(ptr_t) invalidated_terminals = SET_INIT;
 
-static void emit_term_request(void **argv)
+static void emit_termrequest(void **argv)
 {
-  char *payload = argv[0];
-  size_t payload_length = (size_t)argv[1];
-  Terminal *rv = argv[2];
+  Terminal *term = argv[0];
+  char *payload = argv[1];
+  size_t payload_length = (size_t)argv[2];
+  StringBuilder *pending_send = argv[3];
 
-  buf_T *buf = handle_get_buffer(rv->buf_handle);
+  buf_T *buf = handle_get_buffer(term->buf_handle);
   String termrequest = { .data = payload, .size = payload_length };
   Object data = STRING_OBJ(termrequest);
   set_vim_var_string(VV_TERMREQUEST, payload, (ptrdiff_t)payload_length);
   apply_autocmds_group(EVENT_TERMREQUEST, NULL, NULL, false, AUGROUP_ALL, buf, NULL, &data);
   xfree(payload);
+
+  StringBuilder *term_pending_send = term->pending_send;
+  term->pending_send = NULL;
+  if (kv_size(*pending_send)) {
+    terminal_send(term, pending_send->items, pending_send->size);
+    kv_destroy(*pending_send);
+  }
+  if (term_pending_send != pending_send) {
+    term->pending_send = term_pending_send;
+  }
+  xfree(pending_send);
+}
+
+static void schedule_termrequest(Terminal *term, char *payload, size_t payload_length)
+{
+  term->pending_send = xmalloc(sizeof(StringBuilder));
+  kv_init(*term->pending_send);
+  multiqueue_put(main_loop.events, emit_termrequest, term, payload, (void *)payload_length,
+                 term->pending_send);
+}
+
+static int parse_osc8(VTermStringFragment frag, int *attr)
+  FUNC_ATTR_NONNULL_ALL
+{
+  // Parse the URI from the OSC 8 sequence and add the URL to our URL set.
+  // Skip the ID, we don't use it (for now)
+  size_t i = 0;
+  for (; i < frag.len; i++) {
+    if (frag.str[i] == ';') {
+      break;
+    }
+  }
+
+  // Move past the semicolon
+  i++;
+
+  if (i >= frag.len) {
+    // Invalid OSC sequence
+    return 0;
+  }
+
+  // Find the terminator
+  const size_t start = i;
+  for (; i < frag.len; i++) {
+    if (frag.str[i] == '\a' || frag.str[i] == '\x1b') {
+      break;
+    }
+  }
+
+  const size_t len = i - start;
+  if (len == 0) {
+    // Empty OSC 8, no URL
+    *attr = 0;
+    return 1;
+  }
+
+  char *url = xmemdupz(&frag.str[start], len + 1);
+  url[len] = 0;
+  *attr = hl_add_url(0, url);
+  xfree(url);
+
+  return 1;
 }
 
 static int on_osc(int command, VTermStringFragment frag, void *user)
+  FUNC_ATTR_NONNULL_ALL
 {
-  if (frag.str == NULL) {
+  Terminal *term = user;
+
+  if (frag.str == NULL || frag.len == 0) {
     return 0;
+  }
+
+  if (command == 8) {
+    int attr = 0;
+    if (parse_osc8(frag, &attr)) {
+      VTermState *state = vterm_obtain_state(term->vt);
+      VTermValue value = { .number = attr };
+      vterm_state_set_penattr(state, VTERM_ATTR_URI, VTERM_VALUETYPE_INT, &value);
+    }
+  }
+
+  if (!has_event(EVENT_TERMREQUEST)) {
+    return 1;
   }
 
   StringBuilder request = KV_INITIAL_VALUE;
   kv_printf(request, "\x1b]%d;", command);
   kv_concat_len(request, frag.str, frag.len);
-  multiqueue_put(main_loop.events, emit_term_request, request.items, (void *)request.size, user);
+  schedule_termrequest(term, request.items, request.size);
   return 1;
 }
 
 static int on_dcs(const char *command, size_t commandlen, VTermStringFragment frag, void *user)
 {
-  if ((command == NULL) || (frag.str == NULL)) {
+  if (command == NULL || frag.str == NULL) {
     return 0;
+  }
+  if (!has_event(EVENT_TERMREQUEST)) {
+    return 1;
   }
 
   StringBuilder request = KV_INITIAL_VALUE;
   kv_printf(request, "\x1bP%*s", (int)commandlen, command);
   kv_concat_len(request, frag.str, frag.len);
-  multiqueue_put(main_loop.events, emit_term_request, request.items, (void *)request.size, user);
+  schedule_termrequest(user, request.items, request.size);
   return 1;
 }
 
@@ -264,46 +361,43 @@ void terminal_open(Terminal **termpp, buf_T *buf, TerminalOptions opts)
   FUNC_ATTR_NONNULL_ALL
 {
   // Create a new terminal instance and configure it
-  Terminal *rv = *termpp = xcalloc(1, sizeof(Terminal));
-  rv->opts = opts;
-  rv->cursor.visible = true;
+  Terminal *term = *termpp = xcalloc(1, sizeof(Terminal));
+  term->opts = opts;
+  term->cursor.visible = true;
   // Associate the terminal instance with the new buffer
-  rv->buf_handle = buf->handle;
-  buf->terminal = rv;
+  term->buf_handle = buf->handle;
+  buf->terminal = term;
   // Create VTerm
-  rv->vt = vterm_new(opts.height, opts.width);
-  vterm_set_utf8(rv->vt, 1);
+  term->vt = vterm_new(opts.height, opts.width);
+  vterm_set_utf8(term->vt, 1);
   // Setup state
-  VTermState *state = vterm_obtain_state(rv->vt);
+  VTermState *state = vterm_obtain_state(term->vt);
   // Set up screen
-  rv->vts = vterm_obtain_screen(rv->vt);
-  vterm_screen_enable_altscreen(rv->vts, true);
-  vterm_screen_enable_reflow(rv->vts, true);
+  term->vts = vterm_obtain_screen(term->vt);
+  vterm_screen_enable_altscreen(term->vts, true);
+  vterm_screen_enable_reflow(term->vts, true);
   // delete empty lines at the end of the buffer
-  vterm_screen_set_callbacks(rv->vts, &vterm_screen_callbacks, rv);
-  vterm_screen_set_unrecognised_fallbacks(rv->vts, &vterm_fallbacks, rv);
-  vterm_screen_set_damage_merge(rv->vts, VTERM_DAMAGE_SCROLL);
-  vterm_screen_reset(rv->vts, 1);
-  vterm_output_set_callback(rv->vt, term_output_callback, rv);
+  vterm_screen_set_callbacks(term->vts, &vterm_screen_callbacks, term);
+  vterm_screen_set_unrecognised_fallbacks(term->vts, &vterm_fallbacks, term);
+  vterm_screen_set_damage_merge(term->vts, VTERM_DAMAGE_SCROLL);
+  vterm_screen_reset(term->vts, 1);
+  vterm_output_set_callback(term->vt, term_output_callback, term);
+
+  term->selection_buffer = xcalloc(SELECTIONBUF_SIZE, 1);
+  vterm_state_set_selection_callbacks(state, &vterm_selection_callbacks, term,
+                                      term->selection_buffer, SELECTIONBUF_SIZE);
+
   // force a initial refresh of the screen to ensure the buffer will always
   // have as many lines as screen rows when refresh_scrollback is called
-  rv->invalid_start = 0;
-  rv->invalid_end = opts.height;
+  term->invalid_start = 0;
+  term->invalid_end = opts.height;
 
   aco_save_T aco;
   aucmd_prepbuf(&aco, buf);
 
-  refresh_screen(rv, buf);
+  refresh_screen(term, buf);
   set_option_value(kOptBuftype, STATIC_CSTR_AS_OPTVAL("terminal"), OPT_LOCAL);
 
-  // Default settings for terminal buffers
-  buf->b_p_ma = false;     // 'nomodifiable'
-  buf->b_p_ul = -1;        // 'undolevels'
-  buf->b_p_scbk =          // 'scrollback' (initialize local from global)
-                  (p_scbk < 0) ? 10000 : MAX(1, p_scbk);
-  buf->b_p_tw = 0;         // 'textwidth'
-  set_option_value(kOptWrap, BOOLEAN_OPTVAL(false), OPT_LOCAL);
-  set_option_value(kOptList, BOOLEAN_OPTVAL(false), OPT_LOCAL);
   if (buf->b_ffname != NULL) {
     buf_set_term_title(buf, buf->b_ffname, strlen(buf->b_ffname));
   }
@@ -311,7 +405,7 @@ void terminal_open(Terminal **termpp, buf_T *buf, TerminalOptions opts)
   // Reset cursor in current window.
   curwin->w_cursor = (pos_T){ .lnum = 1, .col = 0, .coladd = 0 };
   // Initialize to check if the scrollback buffer has been allocated in a TermOpen autocmd.
-  rv->sb_buffer = NULL;
+  term->sb_buffer = NULL;
   // Apply TermOpen autocmds _before_ configuring the scrollback buffer.
   apply_autocmds(EVENT_TERMOPEN, NULL, NULL, false, buf);
 
@@ -321,14 +415,14 @@ void terminal_open(Terminal **termpp, buf_T *buf, TerminalOptions opts)
     return;  // Terminal has already been destroyed.
   }
 
-  if (rv->sb_buffer == NULL) {
+  if (term->sb_buffer == NULL) {
     // Local 'scrollback' _after_ autocmds.
     if (buf->b_p_scbk < 1) {
       buf->b_p_scbk = SB_MAX;
     }
     // Configure the scrollback buffer.
-    rv->sb_size = (size_t)buf->b_p_scbk;
-    rv->sb_buffer = xmalloc(sizeof(ScrollbackLine *) * rv->sb_size);
+    term->sb_size = (size_t)buf->b_p_scbk;
+    term->sb_buffer = xmalloc(sizeof(ScrollbackLine *) * term->sb_size);
   }
 
   // Configure the color palette. Try to get the color from:
@@ -351,7 +445,7 @@ void terminal_open(Terminal **termpp, buf_T *buf, TerminalOptions opts)
                         (uint8_t)((color_val >> 8) & 0xFF),
                         (uint8_t)((color_val >> 0) & 0xFF));
         vterm_state_set_palette_color(state, i, &color);
-        rv->color_set[i] = true;
+        term->color_set[i] = true;
       }
     }
   }
@@ -513,6 +607,9 @@ bool terminal_enter(void)
   } else {
     curwin->w_p_cul = false;
   }
+  if (curwin->w_p_cuc) {
+    redraw_later(curwin, UPD_SOME_VALID);
+  }
   curwin->w_p_cuc = false;
   curwin->w_p_so = 0;
   curwin->w_p_siso = 0;
@@ -583,7 +680,7 @@ static void terminal_check_cursor(void)
                               row_to_linenr(term, term->cursor.row));
   // Nudge cursor when returning to normal-mode.
   int off = is_focused(term) ? 0 : (curwin->w_p_rl ? 1 : -1);
-  coladvance(MAX(0, term->cursor.col + off));
+  coladvance(curwin, MAX(0, term->cursor.col + off));
 }
 
 // Function executed before each iteration of terminal mode.
@@ -597,7 +694,7 @@ static int terminal_check(VimState *state)
   }
 
   terminal_check_cursor();
-  validate_cursor();
+  validate_cursor(curwin);
 
   if (must_redraw) {
     update_screen();
@@ -651,6 +748,10 @@ static int terminal_execute(VimState *state, int key)
     }
     break;
 
+  case K_PASTE_START:
+    paste_repeat(1);
+    break;
+
   case K_EVENT:
     // We cannot let an event free the terminal yet. It is still needed.
     s->term->refcount++;
@@ -685,6 +786,12 @@ static int terminal_execute(VimState *state, int key)
     FALLTHROUGH;
 
   default:
+    if (key == Ctrl_C) {
+      // terminal_enter() always sets `mapped_ctrl_c` to avoid `got_int`. 8eeda7169aa4
+      // But `got_int` may be set elsewhere, e.g. by interrupt() or an autocommand,
+      // so ensure that it is cleared.
+      got_int = false;
+    }
     if (key == Ctrl_BSL && !s->got_bsl) {
       s->got_bsl = true;
       break;
@@ -736,6 +843,8 @@ void terminal_destroy(Terminal **termpp)
     }
     xfree(term->sb_buffer);
     xfree(term->title);
+    xfree(term->selection_buffer);
+    kv_destroy(term->selection);
     vterm_free(term->vt);
     xfree(term);
     *termpp = NULL;  // coverity[dead-store]
@@ -745,6 +854,10 @@ void terminal_destroy(Terminal **termpp)
 static void terminal_send(Terminal *term, const char *data, size_t size)
 {
   if (term->closed) {
+    return;
+  }
+  if (term->pending_send) {
+    kv_concat_len(*term->pending_send, data, size);
     return;
   }
   term->opts.write_cb(data, size, term->opts.data);
@@ -808,7 +921,7 @@ void terminal_paste(int count, char **y_array, size_t y_size)
       }
       char *dst = buff;
       char *src = y_array[j];
-      while (*src != '\0') {
+      while (*src != NUL) {
         len = (size_t)utf_ptr2len(src);
         int c = utf_ptr2char(src);
         if (!is_filter_char(c)) {
@@ -943,6 +1056,10 @@ void terminal_get_line_attributes(Terminal *term, win_T *wp, int linenr, int *te
         .hl_blend = -1,
         .url = -1,
       });
+    }
+
+    if (cell.uri > 0) {
+      attr_id = hl_combine_attr(attr_id, cell.uri);
     }
 
     if (term->cursor.visible && term->cursor.row == row
@@ -1143,10 +1260,7 @@ static int term_sb_pop(int cols, VTermScreenCell *cells, void *data)
   memmove(term->sb_buffer, term->sb_buffer + 1,
           sizeof(term->sb_buffer[0]) * (term->sb_current));
 
-  size_t cols_to_copy = (size_t)cols;
-  if (cols_to_copy > sbrow->cols) {
-    cols_to_copy = sbrow->cols;
-  }
+  size_t cols_to_copy = MIN((size_t)cols, sbrow->cols);
 
   // copy to vterm state
   memcpy(cells, sbrow->cells, sizeof(cells[0]) * cols_to_copy);
@@ -1157,6 +1271,54 @@ static int term_sb_pop(int cols, VTermScreenCell *cells, void *data)
 
   xfree(sbrow);
   set_put(ptr_t, &invalidated_terminals, term);
+
+  return 1;
+}
+
+static void term_clipboard_set(void **argv)
+{
+  VTermSelectionMask mask = (VTermSelectionMask)(long)argv[0];
+  char *data = argv[1];
+
+  char regname;
+  switch (mask) {
+  case VTERM_SELECTION_CLIPBOARD:
+    regname = '+';
+    break;
+  case VTERM_SELECTION_PRIMARY:
+    regname = '*';
+    break;
+  default:
+    regname = '+';
+    break;
+  }
+
+  list_T *lines = tv_list_alloc(1);
+  tv_list_append_allocated_string(lines, data);
+
+  list_T *args = tv_list_alloc(3);
+  tv_list_append_list(args, lines);
+
+  const char regtype = 'v';
+  tv_list_append_string(args, &regtype, 1);
+
+  tv_list_append_string(args, &regname, 1);
+  eval_call_provider("clipboard", "set", args, true);
+}
+
+static int term_selection_set(VTermSelectionMask mask, VTermStringFragment frag, void *user)
+{
+  Terminal *term = user;
+  if (frag.initial) {
+    kv_size(term->selection) = 0;
+  }
+
+  kv_concat_len(term->selection, frag.str, frag.len);
+
+  if (frag.final) {
+    char *data = xmemdupz(term->selection.items, kv_size(term->selection));
+    multiqueue_put(main_loop.events, term_clipboard_set, (void *)mask, data);
+  }
 
   return 1;
 }
@@ -1594,7 +1756,10 @@ end:
     return false;
   }
 
-  ins_char_typebuf(vgetc_char, vgetc_mod_mask);
+  int len = ins_char_typebuf(vgetc_char, vgetc_mod_mask, true);
+  if (KeyTyped) {
+    ungetchars(len);
+  }
   return true;
 }
 

@@ -1,15 +1,15 @@
-local helpers = require('test.unit.helpers')(after_each)
-local itp = helpers.gen_itp(it)
+local t = require('test.unit.testutil')
+local itp = t.gen_itp(it)
 
-local to_cstr = helpers.to_cstr
-local get_str = helpers.ffi.string
-local eq = helpers.eq
-local NULL = helpers.NULL
+local to_cstr = t.to_cstr
+local get_str = t.ffi.string
+local eq = t.eq
+local NULL = t.NULL
 
-local buffer = helpers.cimport('./src/nvim/buffer.h')
-local globals = helpers.cimport('./src/nvim/globals.h')
-local stl = helpers.cimport('./src/nvim/statusline.h')
-local grid = helpers.cimport('./src/nvim/grid.h')
+local buffer = t.cimport('./src/nvim/buffer.h')
+local globals = t.cimport('./src/nvim/globals.h')
+local stl = t.cimport('./src/nvim/statusline.h')
+local grid = t.cimport('./src/nvim/grid.h')
 
 describe('build_stl_str_hl', function()
   local buffer_byte_size = 100
@@ -56,14 +56,14 @@ describe('build_stl_str_hl', function()
   -- @param input_stl The format string for the statusline
   -- @param expected_stl The expected result string for the statusline
   --
-  -- @param arg Options can be placed in an optional dictionary as the last parameter
+  -- @param arg Options can be placed in an optional dict as the last parameter
   --    .expected_cell_count The expected number of cells build_stl_str_hl will return
   --    .expected_byte_length The expected byte length of the string (defaults to byte length of expected_stl)
   --    .file_name The name of the file to be tested (useful in %f type tests)
   --    .fillchar The character that will be used to fill any 'extra' space in the stl
   local function statusline_test(description, statusline_cell_count, input_stl, expected_stl, arg)
     -- arg is the optional parameter
-    -- so we either fill in option with arg or an empty dictionary
+    -- so we either fill in option with arg or an empty dict
     local option = arg or {}
 
     local fillchar = option.fillchar or ' '

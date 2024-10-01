@@ -1,15 +1,17 @@
-local helpers = require('test.functional.helpers')(after_each)
-local assert_alive = helpers.assert_alive
-local eval, command, feed = helpers.eval, helpers.command, helpers.feed
-local eq, clear, insert = helpers.eq, helpers.clear, helpers.insert
-local expect, write_file = helpers.expect, helpers.write_file
-local feed_command = helpers.feed_command
-local source = helpers.source
-local missing_provider = helpers.missing_provider
-local matches = helpers.matches
-local pcall_err = helpers.pcall_err
-local fn = helpers.fn
-local dedent = helpers.dedent
+local t = require('test.testutil')
+local n = require('test.functional.testnvim')()
+
+local assert_alive = n.assert_alive
+local eval, command, feed = n.eval, n.command, n.feed
+local eq, clear, insert = t.eq, n.clear, n.insert
+local expect, write_file = n.expect, t.write_file
+local feed_command = n.feed_command
+local source = n.source
+local missing_provider = n.missing_provider
+local matches = t.matches
+local pcall_err = t.pcall_err
+local fn = n.fn
+local dedent = t.dedent
 
 do
   clear()
@@ -19,6 +21,12 @@ do
       local expected = [[Vim%(py3.*%):E319: No "python3" provider found.*]]
       matches(expected, pcall_err(command, 'py3 print("foo")'))
       matches(expected, pcall_err(command, 'py3file foo'))
+    end)
+    it('feature test when Python 3 provider is missing', function()
+      eq(0, eval('has("python3")'))
+      eq(0, eval('has("python3_compiled")'))
+      eq(0, eval('has("python3_dynamic")'))
+      eq(0, eval('has("pythonx")'))
     end)
     pending(
       string.format('Python 3 (or the pynvim module) is broken/missing (%s)', reason),
@@ -38,6 +46,7 @@ describe('python3 provider', function()
     eq(1, eval('has("python3")'))
     eq(1, eval('has("python3_compiled")'))
     eq(1, eval('has("python3_dynamic")'))
+    eq(1, eval('has("pythonx")'))
     eq(0, eval('has("python3_dynamic_")'))
     eq(0, eval('has("python3_")'))
   end)
@@ -146,7 +155,7 @@ describe('python3 provider', function()
   end)
 
   it('RPC call to expand("<afile>") during BufDelete #5245 #5617', function()
-    helpers.add_builddir_to_rtp()
+    n.add_builddir_to_rtp()
     source([=[
       python3 << EOF
       import vim

@@ -36,6 +36,7 @@ return {
     'CursorHold', -- cursor in same position for a while
     'CursorHoldI', -- idem, in Insert mode
     'CursorMoved', -- cursor was moved
+    'CursorMovedC', -- cursor was moved in Cmdline mode
     'CursorMovedI', -- cursor was moved in Insert mode
     'DiagnosticChanged', -- diagnostics in a buffer were modified
     'DiffUpdated', -- diffs have been updated
@@ -88,6 +89,7 @@ return {
     'SafeState', -- going to wait for a character
     'SearchWrapped', -- after the search wrapped around
     'SessionLoadPost', -- after loading a session file
+    'SessionWritePost', -- after writing a session file
     'ShellCmdPost', -- after ":!cmd"
     'ShellFilterPost', -- after ":1,2!cmd", ":w !cmd", ":r !cmd".
     'Signal', -- after nvim process received a signal

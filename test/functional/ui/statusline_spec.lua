@@ -1,16 +1,19 @@
-local helpers = require('test.functional.helpers')(after_each)
+local t = require('test.testutil')
+local n = require('test.functional.testnvim')()
 local Screen = require('test.functional.ui.screen')
-local assert_alive = helpers.assert_alive
-local clear = helpers.clear
-local command = helpers.command
-local feed = helpers.feed
-local eq = helpers.eq
-local fn = helpers.fn
-local api = helpers.api
-local exec = helpers.exec
-local exec_lua = helpers.exec_lua
-local eval = helpers.eval
+
+local assert_alive = n.assert_alive
+local clear = n.clear
+local command = n.command
+local feed = n.feed
+local eq = t.eq
+local fn = n.fn
+local api = n.api
+local exec = n.exec
+local exec_lua = n.exec_lua
+local eval = n.eval
 local sleep = vim.uv.sleep
+local pcall_err = t.pcall_err
 
 local mousemodels = { 'extend', 'popup', 'popup_setpos' }
 
@@ -474,6 +477,25 @@ describe('global statusline', function()
                                                                   |
     ]])
   end)
+
+  it('horizontal separators unchanged when failing to split-move window', function()
+    exec([[
+      botright split
+      let &winwidth = &columns
+      let &winminwidth = &columns
+    ]])
+    eq('Vim(wincmd):E36: Not enough room', pcall_err(command, 'wincmd L'))
+    command('mode')
+    screen:expect([[
+                                                                  |
+      {1:~                                                           }|*5
+      ────────────────────────────────────────────────────────────|
+      ^                                                            |
+      {1:~                                                           }|*6
+      {2:[No Name]                                 0,0-1          All}|
+                                                                  |
+    ]])
+  end)
 end)
 
 it('statusline does not crash if it has Arabic characters #19447', function()
@@ -576,57 +598,59 @@ it('statusline is redrawn on various state changes', function()
   command('set ls=2 stl=%{repeat(reg_recording(),5)}')
   screen:expect([[
     ^                                        |
-    ~                                       |
-                                            |*2
+    {1:~                                       }|
+    {3:                                        }|
+                                            |
   ]])
   feed('qQ')
   screen:expect([[
     ^                                        |
-    ~                                       |
-    QQQQQ                                   |
-    recording @Q                            |
+    {1:~                                       }|
+    {3:QQQQQ                                   }|
+    {5:recording @Q}                            |
   ]])
   feed('q')
   screen:expect([[
     ^                                        |
-    ~                                       |
-                                            |*2
+    {1:~                                       }|
+    {3:                                        }|
+                                            |
   ]])
 
   -- Visual mode change #23932
   command('set ls=2 stl=%{mode(1)}')
   screen:expect([[
     ^                                        |
-    ~                                       |
-    n                                       |
+    {1:~                                       }|
+    {3:n                                       }|
                                             |
   ]])
   feed('v')
   screen:expect([[
     ^                                        |
-    ~                                       |
-    v                                       |
-    -- VISUAL --                            |
+    {1:~                                       }|
+    {3:v                                       }|
+    {5:-- VISUAL --}                            |
   ]])
   feed('V')
   screen:expect([[
     ^                                        |
-    ~                                       |
-    V                                       |
-    -- VISUAL LINE --                       |
+    {1:~                                       }|
+    {3:V                                       }|
+    {5:-- VISUAL LINE --}                       |
   ]])
   feed('<C-V>')
   screen:expect([[
     ^                                        |
-    ~                                       |
-    ^V                                      |
-    -- VISUAL BLOCK --                      |
+    {1:~                                       }|
+    {3:^V                                      }|
+    {5:-- VISUAL BLOCK --}                      |
   ]])
   feed('<Esc>')
   screen:expect([[
     ^                                        |
-    ~                                       |
-    n                                       |
+    {1:~                                       }|
+    {3:n                                       }|
                                             |
   ]])
 end)

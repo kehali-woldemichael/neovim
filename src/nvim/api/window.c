@@ -13,6 +13,7 @@
 #include "nvim/buffer_defs.h"
 #include "nvim/cursor.h"
 #include "nvim/drawscreen.h"
+#include "nvim/errors.h"
 #include "nvim/eval/window.h"
 #include "nvim/ex_docmd.h"
 #include "nvim/gettext_defs.h"
@@ -61,11 +62,17 @@ void nvim_win_set_buf(Window window, Buffer buffer, Error *err)
   if (!win || !buf) {
     return;
   }
+
+  if (win->w_p_wfb) {
+    api_set_error(err, kErrorTypeException, "%s", e_winfixbuf_cannot_go_to_buffer);
+    return;
+  }
+
   if (win == cmdwin_win || win == cmdwin_old_curwin || buf == cmdwin_buf) {
     api_set_error(err, kErrorTypeException, "%s", e_cmdwin);
     return;
   }
-  win_set_buf(win, buf, false, err);
+  win_set_buf(win, buf, err);
 }
 
 /// Gets the (1,0)-indexed, buffer-relative cursor position for a given window
@@ -132,7 +139,7 @@ void nvim_win_set_cursor(Window window, ArrayOf(Integer, 2) pos, Error *err)
   win->w_cursor.col = (colnr_T)col;
   win->w_cursor.coladd = 0;
   // When column is out of range silently correct it.
-  check_cursor_col_win(win);
+  check_cursor_col(win);
 
   // Make sure we stick in this column.
   win->w_set_curswant = true;
@@ -142,7 +149,7 @@ void nvim_win_set_cursor(Window window, ArrayOf(Integer, 2) pos, Error *err)
   switchwin_T switchwin;
   switch_win(&switchwin, win, NULL, true);
   update_topline(curwin);
-  validate_cursor();
+  validate_cursor(curwin);
   restore_win(&switchwin, true);
 
   redraw_later(win, UPD_VALID);
@@ -452,6 +459,7 @@ Object nvim_win_call(Window window, LuaRef fun, Error *err)
 ///
 /// This takes precedence over the 'winhighlight' option.
 ///
+/// @param window
 /// @param ns_id the namespace to use
 /// @param[out] err Error details, if any
 void nvim_win_set_hl_ns(Window window, Integer ns_id, Error *err)
@@ -495,16 +503,15 @@ void nvim_win_set_hl_ns(Window window, Integer ns_id, Error *err)
 ///                - end_vcol: Ending virtual column index on "end_row",
 ///                            0-based exclusive, rounded up to full screen lines.
 ///                            When omitted include the whole line.
-/// @return  Dictionary containing text height information, with these keys:
+/// @return  Dict containing text height information, with these keys:
 ///          - all: The total number of screen lines occupied by the range.
 ///          - fill: The number of diff filler or virtual lines among them.
 ///
 /// @see |virtcol()| for text width.
-Dictionary nvim_win_text_height(Window window, Dict(win_text_height) *opts, Arena *arena,
-                                Error *err)
+Dict nvim_win_text_height(Window window, Dict(win_text_height) *opts, Arena *arena, Error *err)
   FUNC_API_SINCE(12)
 {
-  Dictionary rv = arena_dict(arena, 2);
+  Dict rv = arena_dict(arena, 2);
 
   win_T *const win = find_window_by_handle(window, err);
   if (!win) {

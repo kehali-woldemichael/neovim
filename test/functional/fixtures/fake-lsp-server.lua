@@ -110,7 +110,8 @@ local tests = {}
 
 function tests.basic_init()
   skeleton {
-    on_init = function(_)
+    on_init = function(params)
+      assert_eq(params.workDoneToken, '1')
       return {
         capabilities = {
           textDocumentSync = protocol.TextDocumentSyncKind.None,
@@ -938,6 +939,48 @@ function tests.basic_formatting()
   }
 end
 
+function tests.range_formatting()
+  skeleton {
+    on_init = function()
+      return {
+        capabilities = {
+          documentFormattingProvider = true,
+          documentRangeFormattingProvider = true,
+        },
+      }
+    end,
+    body = function()
+      notify('start')
+      expect_request('textDocument/rangeFormatting', function()
+        return nil, {}
+      end)
+      notify('shutdown')
+    end,
+  }
+end
+
+function tests.ranges_formatting()
+  skeleton {
+    on_init = function()
+      return {
+        capabilities = {
+          documentFormattingProvider = true,
+          documentRangeFormattingProvider = {
+            rangesSupport = true,
+          },
+        },
+      }
+    end,
+    body = function()
+      notify('start')
+      expect_request('textDocument/rangesFormatting', function()
+        return nil, {}
+      end)
+      notify('shutdown')
+    end,
+  }
+end
+
 function tests.set_defaults_all_capabilities()
   skeleton {
     on_init = function(_)
@@ -983,7 +1026,7 @@ local test_name = arg[1]
 local timeout = arg[2]
 assert(type(test_name) == 'string', 'test_name must be specified as first arg.')
 
-local kill_timer = vim.uv.new_timer()
+local kill_timer = assert(vim.uv.new_timer())
 kill_timer:start(timeout or 1e3, 0, function()
   kill_timer:stop()
   kill_timer:close()

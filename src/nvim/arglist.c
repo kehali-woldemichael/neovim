@@ -13,6 +13,7 @@
 #include "nvim/buffer_defs.h"
 #include "nvim/charset.h"
 #include "nvim/cmdexpand_defs.h"
+#include "nvim/errors.h"
 #include "nvim/eval/typval.h"
 #include "nvim/eval/typval_defs.h"
 #include "nvim/eval/window.h"
@@ -202,6 +203,8 @@ void alist_set(alist_T *al, int count, char **files, int use_curbuf, int *fnum_l
 /// Add file "fname" to argument list "al".
 /// "fname" must have been allocated and "al" must have been checked for room.
 ///
+/// May trigger Buf* autocommands
+///
 /// @param set_fnum  1: set buffer number; 2: re-use curbuf
 void alist_add(alist_T *al, char *fname, int set_fnum)
 {
@@ -212,6 +215,7 @@ void alist_add(alist_T *al, char *fname, int set_fnum)
     return;
   }
   arglist_locked = true;
+  curwin->w_locked = true;
 
 #ifdef BACKSLASH_IN_FILENAME
   slash_adjust(fname);
@@ -224,6 +228,7 @@ void alist_add(alist_T *al, char *fname, int set_fnum)
   al->al_ga.ga_len++;
 
   arglist_locked = false;
+  curwin->w_locked = false;
 }
 
 #if defined(BACKSLASH_IN_FILENAME)
@@ -345,23 +350,20 @@ static void alist_add_list(int count, char **files, int after, bool will_edit)
   int old_argcount = ARGCOUNT;
   ga_grow(&ALIST(curwin)->al_ga, count);
   if (check_arglist_locked() != FAIL) {
-    if (after < 0) {
-      after = 0;
-    }
-    if (after > ARGCOUNT) {
-      after = ARGCOUNT;
-    }
+    after = MIN(MAX(after, 0), ARGCOUNT);
     if (after < ARGCOUNT) {
       memmove(&(ARGLIST[after + count]), &(ARGLIST[after]),
               (size_t)(ARGCOUNT - after) * sizeof(aentry_T));
     }
     arglist_locked = true;
+    curwin->w_locked = true;
     for (int i = 0; i < count; i++) {
       const int flags = BLN_LISTED | (will_edit ? BLN_CURBUF : 0);
       ARGLIST[after + i].ae_fname = files[i];
       ARGLIST[after + i].ae_fnum = buflist_add(files[i], flags);
     }
     arglist_locked = false;
+    curwin->w_locked = false;
     ALIST(curwin)->al_ga.ga_len += count;
     if (old_argcount > 0 && curwin->w_arg_idx >= after) {
       curwin->w_arg_idx += count;
@@ -623,6 +625,8 @@ void ex_argument(exarg_T *eap)
 /// Edit file "argn" of the argument lists.
 void do_argfile(exarg_T *eap, int argn)
 {
+  bool is_split_cmd = *eap->cmd == 's';
+
   int old_arg_idx = curwin->w_arg_idx;
 
   if (argn < 0 || argn >= ARGCOUNT) {
@@ -637,10 +641,16 @@ void do_argfile(exarg_T *eap, int argn)
     return;
   }
 
+  if (!is_split_cmd
+      && (&ARGLIST[argn])->ae_fnum != curbuf->b_fnum
+      && !check_can_set_curbuf_forceit(eap->forceit)) {
+    return;
+  }
+
   setpcmark();
 
   // split window or create new tab page first
-  if (*eap->cmd == 's' || cmdmod.cmod_tab != 0) {
+  if (is_split_cmd || cmdmod.cmod_tab != 0) {
     if (win_split(0, 0) == FAIL) {
       return;
     }

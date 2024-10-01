@@ -53,11 +53,17 @@ active		  yes		 yes		  'a'
 hidden		  no		 yes		  'h'
 inactive	  no		 no		  ' '
 
-Note: All CTRL-W commands can also be executed with |:wincmd|, for those
-places where a Normal mode command can't be used or is inconvenient.
+							*buffer-reuse*
+Each buffer has a unique number and the number will not change within a Vim
+session.  The |bufnr()| and |bufname()| functions can be used to convert
+between a buffer name and the buffer number.  There is one exception: if a new
+empty buffer is created and it is not modified, the buffer will be re-used
+when loading another file into that buffer. This also means the buffer number
+will not change.
 
 The main Vim window can hold several split windows.  There are also tab pages
 |tab-page|, each of which can hold multiple windows.
+
 					*window-ID* *winid* *windowid*
 Each window has a unique identifier called the window ID.  This identifier
 will not change within a Vim session. The |win_getid()| and |win_id2tabwin()|
@@ -69,9 +75,6 @@ across tabs.  For most functions that take a window ID or a window number, the
 window number only applies to the current tab, while the window ID can refer
 to a window in any tab.
 
-Each buffer has a unique number and the number will not change within a Vim
-session.  The |bufnr()| and |bufname()| functions can be used to convert
-between a buffer name and the buffer number.
 
 ==============================================================================
 2. Starting Vim						*windows-starting*
@@ -468,6 +471,10 @@ These commands can also be executed with ":wincmd":
 			:exe nr .. "wincmd w"
 <		This goes to window "nr".
 
+Note: All CTRL-W commands can also be executed with |:wincmd|, for those
+places where a Normal mode command can't be used or is inconvenient (e.g.
+in a browser-based terminal).
+
 ==============================================================================
 5. Moving windows around				*window-moving*
 
@@ -502,35 +509,33 @@ horizontally split windows.  CTRL-W H does it the other way around.
 
 						*CTRL-W_K*
 CTRL-W K	Move the current window to be at the very top, using the full
-		width of the screen.  This works like closing the current
-		window and then creating another one with ":topleft split",
-		except that the current window contents is used for the new
-		window.
+		width of the screen.  This works like `:topleft split`, except
+		it is applied to the current window and no new window is
+		created.
 
 						*CTRL-W_J*
 CTRL-W J	Move the current window to be at the very bottom, using the
-		full width of the screen.  This works like closing the current
-		window and then creating another one with ":botright split",
-		except that the current window contents is used for the new
-		window.
+		full width of the screen.  This works like `:botright split`,
+		except it is applied to the current window and no new window
+		is created.
 
 						*CTRL-W_H*
 CTRL-W H	Move the current window to be at the far left, using the
-		full height of the screen.  This works like closing the
-		current window and then creating another one with
-		`:vert topleft split`, except that the current window contents
-		is used for the new window.
+		full height of the screen.  This works like
+		`:vert topleft split`, except it is applied to the current
+		window and no new window is created.
 
 						*CTRL-W_L*
 CTRL-W L	Move the current window to be at the far right, using the full
-		height of the screen.  This works like closing the
-		current window and then creating another one with
-		`:vert botright split`, except that the current window
-		contents is used for the new window.
+		height of the screen.  This works like `:vert botright split`,
+		except it is applied to the current window and no new window
+		is created.
 
 						*CTRL-W_T*
 CTRL-W T	Move the current window to a new tab page.  This fails if
 		there is only one window in the current tab page.
+		This works like `:tab split`, except the previous window is
+		closed.
 		When a count is specified the new tab page will be opened
 		before the tab page with this index.  Otherwise it comes after
 		the current tab page.
@@ -1177,11 +1182,12 @@ list of buffers. |unlisted-buffer|
 :bw[ipeout][!] N1 N2 ...
 		Like |:bdelete|, but really delete the buffer.  Everything
 		related to the buffer is lost.  All marks in this buffer
-		become invalid, option settings are lost, etc.  Don't use this
+		become invalid, option settings are lost, the jumplist and
+		tagstack data will be purged, etc.  Don't use this
 		unless you know what you are doing. Examples: >
-                    :.+,$bwipeout   " wipe out all buffers after the current
-                                    " one
-                    :%bwipeout      " wipe out all buffers
+		    :.+,$bwipeout   " wipe out all buffers after the current
+				    " one
+		    :%bwipeout	    " wipe out all buffers
 <
 :[N]bun[load][!]				*:bun* *:bunload* *E515*
 :bun[load][!] [N]
@@ -1244,7 +1250,7 @@ list of buffers. |unlisted-buffer|
 			:w foobar | sp #
 <		Also see |+cmd|.
 
-:[N]bn[ext][!] [+cmd] [N]				*:bn* *:bnext* *E87*
+:[N]bn[ext][!] [+cmd] [N]				*:bn* *:bnext* *[b* *E87*
 		Go to [N]th next buffer in buffer list.  [N] defaults to one.
 		Wraps around the end of the buffer list.
 		See |:buffer-!| for [!].
@@ -1262,7 +1268,7 @@ list of buffers. |unlisted-buffer|
 		Wraps around the end of the buffer list.  Uses 'switchbuf'
 		Also see |+cmd|.
 
-:[N]bN[ext][!] [+cmd] [N]		*:bN* *:bNext* *:bp* *:bprevious* *E88*
+:[N]bN[ext][!] [+cmd] [N]		*:bN* *:bNext* *:bp* *:bprevious* *]b* *E88*
 :[N]bp[revious][!] [+cmd] [N]
 		Go to [N]th previous buffer in buffer list.  [N] defaults to
 		one.  Wraps around the start of the buffer list.
@@ -1276,7 +1282,7 @@ list of buffers. |unlisted-buffer|
 		Uses 'switchbuf'.
 		Also see |+cmd|.
 
-:br[ewind][!] [+cmd]					*:br* *:bre* *:brewind*
+:br[ewind][!] [+cmd]					*:br* *:bre* *:brewind* *[B*
 		Go to first buffer in buffer list.  If the buffer list is
 		empty, go to the first unlisted buffer.
 		See |:buffer-!| for [!].
@@ -1294,7 +1300,7 @@ list of buffers. |unlisted-buffer|
 :sbf[irst] [+cmd]					*:sbf* *:sbfirst*
 		Same as ":sbrewind".
 
-:bl[ast][!] [+cmd]					*:bl* *:blast*
+:bl[ast][!] [+cmd]					*:bl* *:blast* *]B*
 		Go to last buffer in buffer list.  If the buffer list is
 		empty, go to the last unlisted buffer.
 		See |:buffer-!| for [!].

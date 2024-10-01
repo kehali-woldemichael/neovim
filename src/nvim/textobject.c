@@ -187,7 +187,7 @@ bool findpar(bool *pincl, int dir, int count, int what, bool both)
 
       // skip folded lines
       fold_skipped = false;
-      if (first && hasFolding(curr, &fold_first, &fold_last)) {
+      if (first && hasFolding(curwin, curr, &fold_first, &fold_last)) {
         curr = ((dir > 0) ? fold_last : fold_first) + dir;
         fold_skipped = true;
       }
@@ -218,7 +218,7 @@ bool findpar(bool *pincl, int dir, int count, int what, bool both)
 
     // Put the cursor on the last character in the last line and make the
     // motion inclusive.
-    if ((curwin->w_cursor.col = (colnr_T)strlen(line)) != 0) {
+    if ((curwin->w_cursor.col = ml_get_len(curr)) != 0) {
       curwin->w_cursor.col--;
       curwin->w_cursor.col -= utf_head_off(line, line + curwin->w_cursor.col);
       *pincl = true;
@@ -318,8 +318,8 @@ int fwd_word(int count, bool bigword, bool eol)
   while (--count >= 0) {
     // When inside a range of folded lines, move to the last char of the
     // last line.
-    if (hasFolding(curwin->w_cursor.lnum, NULL, &curwin->w_cursor.lnum)) {
-      coladvance(MAXCOL);
+    if (hasFolding(curwin, curwin->w_cursor.lnum, NULL, &curwin->w_cursor.lnum)) {
+      coladvance(curwin, MAXCOL);
     }
     int sclass = cls();  // starting class
 
@@ -374,7 +374,7 @@ int bck_word(int count, bool bigword, bool stop)
   while (--count >= 0) {
     // When inside a range of folded lines, move to the first char of the
     // first line.
-    if (hasFolding(curwin->w_cursor.lnum, &curwin->w_cursor.lnum, NULL)) {
+    if (hasFolding(curwin, curwin->w_cursor.lnum, &curwin->w_cursor.lnum, NULL)) {
       curwin->w_cursor.col = 0;
     }
     sclass = cls();
@@ -431,8 +431,8 @@ int end_word(int count, bool bigword, bool stop, bool empty)
   while (--count >= 0) {
     // When inside a range of folded lines, move to the last char of the
     // last line.
-    if (hasFolding(curwin->w_cursor.lnum, NULL, &curwin->w_cursor.lnum)) {
-      coladvance(MAXCOL);
+    if (hasFolding(curwin, curwin->w_cursor.lnum, NULL, &curwin->w_cursor.lnum)) {
+      coladvance(curwin, MAXCOL);
     }
     sclass = cls();
     if (inc_cursor() == -1) {
@@ -1193,13 +1193,18 @@ again:
   pos_T end_pos = curwin->w_cursor;
 
   if (!do_include) {
-    // Exclude the start tag.
+    // Exclude the start tag,
+    // but skip over '>' if it appears in quotes
+    bool in_quotes = false;
     curwin->w_cursor = start_pos;
     while (inc_cursor() >= 0) {
-      if (*get_cursor_pos_ptr() == '>') {
+      p = get_cursor_pos_ptr();
+      if (*p == '>' && !in_quotes) {
         inc_cursor();
         start_pos = curwin->w_cursor;
         break;
+      } else if (*p == '"' || *p == '\'') {
+        in_quotes = !in_quotes;
       }
     }
     curwin->w_cursor = end_pos;
@@ -1264,11 +1269,7 @@ int current_par(oparg_T *oap, int count, bool include, int type)
   // When visual area is more than one line: extend it.
   if (VIsual_active && start_lnum != VIsual.lnum) {
 extend:
-    if (start_lnum < VIsual.lnum) {
-      dir = BACKWARD;
-    } else {
-      dir = FORWARD;
-    }
+    dir = start_lnum < VIsual.lnum ? BACKWARD : FORWARD;
     for (int i = count; --i >= 0;) {
       if (start_lnum ==
           (dir == BACKWARD ? 1 : curbuf->b_ml.ml_line_count)) {

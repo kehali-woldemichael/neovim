@@ -1,7 +1,8 @@
 " Vim filetype plugin
-" Language:	Vim
-" Maintainer:	The Vim Project <https://github.com/vim/vim>
-" Last Change:	2023 Aug 10
+" Language:		Vim
+" Maintainer:		Doug Kearns <dougkearns@gmail.com>
+" Last Change:		2024 Apr 13
+" 			2024 May 23 by Riley Bruins <ribru17@gmail.com> ('commentstring')
 " Former Maintainer:	Bram Moolenaar <Bram@vim.org>
 
 " Only do this when not done yet for this buffer
@@ -50,8 +51,8 @@ setlocal isk+=#
 setlocal keywordprg=:help
 
 " Comments starts with # in Vim9 script.  We have to guess which one to use.
-if "\n" .. getline(1, 10)->join("\n") =~# '\n\s*vim9\%[script]\>'
-  setlocal commentstring=#%s
+if "\n" .. getline(1, 32)->join("\n") =~# '\n\s*vim9\%[script]\>'
+  setlocal commentstring=#\ %s
 else
   setlocal commentstring=\"%s
 endif
@@ -65,9 +66,6 @@ setlocal com=sO:#\ -,mO:#\ \ ,eO:##,:#\\\ ,:#,sO:\"\ -,mO:\"\ \ ,eO:\"\",:\"\\\ 
 if &tw == 0
   setlocal tw=78
 endif
-
-" Prefer Vim help instead of manpages.
-setlocal keywordprg=:help
 
 if !exists("no_plugin_maps") && !exists("no_vim_maps")
   let b:did_add_maps = 1

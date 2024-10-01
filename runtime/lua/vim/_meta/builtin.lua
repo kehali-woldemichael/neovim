@@ -3,66 +3,65 @@
 
 error('Cannot require a meta file')
 
----@defgroup vim.builtin
+--- @brief <pre>help
+--- vim.api.{func}({...})                                                    *vim.api*
+---     Invokes Nvim |API| function {func} with arguments {...}.
+---     Example: call the "nvim_get_current_line()" API function: >lua
+---         print(tostring(vim.api.nvim_get_current_line()))
 ---
----@brief <pre>help
----vim.api.{func}({...})                                                    *vim.api*
----    Invokes Nvim |API| function {func} with arguments {...}.
----    Example: call the "nvim_get_current_line()" API function: >lua
----        print(tostring(vim.api.nvim_get_current_line()))
+--- vim.NIL                                                                  *vim.NIL*
+---     Special value representing NIL in |RPC| and |v:null| in Vimscript
+---     conversion, and similar cases. Lua `nil` cannot be used as part of a Lua
+---     table representing a Dictionary or Array, because it is treated as
+---     missing: `{"foo", nil}` is the same as `{"foo"}`.
 ---
----vim.NIL                                                                  *vim.NIL*
----    Special value representing NIL in |RPC| and |v:null| in Vimscript
----    conversion, and similar cases. Lua `nil` cannot be used as part of a Lua
----    table representing a Dictionary or Array, because it is treated as
----    missing: `{"foo", nil}` is the same as `{"foo"}`.
+--- vim.type_idx                                                        *vim.type_idx*
+---     Type index for use in |lua-special-tbl|. Specifying one of the values from
+---     |vim.types| allows typing the empty table (it is unclear whether empty Lua
+---     table represents empty list or empty array) and forcing integral numbers
+---     to be |Float|. See |lua-special-tbl| for more details.
 ---
----vim.type_idx                                                        *vim.type_idx*
----    Type index for use in |lua-special-tbl|. Specifying one of the values from
----    |vim.types| allows typing the empty table (it is unclear whether empty Lua
----    table represents empty list or empty array) and forcing integral numbers
----    to be |Float|. See |lua-special-tbl| for more details.
+--- vim.val_idx                                                          *vim.val_idx*
+---     Value index for tables representing |Float|s. A table representing
+---     floating-point value 1.0 looks like this: >lua
+---         {
+---           [vim.type_idx] = vim.types.float,
+---           [vim.val_idx] = 1.0,
+---         }
+--- <    See also |vim.type_idx| and |lua-special-tbl|.
 ---
----vim.val_idx                                                          *vim.val_idx*
----    Value index for tables representing |Float|s. A table representing
----    floating-point value 1.0 looks like this: >lua
----        {
----          [vim.type_idx] = vim.types.float,
----          [vim.val_idx] = 1.0,
----        }
----<    See also |vim.type_idx| and |lua-special-tbl|.
+--- vim.types                                                              *vim.types*
+---     Table with possible values for |vim.type_idx|. Contains two sets of
+---     key-value pairs: first maps possible values for |vim.type_idx| to
+---     human-readable strings, second maps human-readable type names to values
+---     for |vim.type_idx|. Currently contains pairs for `float`, `array` and
+---         `dictionary` types.
 ---
----vim.types                                                              *vim.types*
----    Table with possible values for |vim.type_idx|. Contains two sets of
----    key-value pairs: first maps possible values for |vim.type_idx| to
----    human-readable strings, second maps human-readable type names to values
----    for |vim.type_idx|. Currently contains pairs for `float`, `array` and
----        `dictionary` types.
+---     Note: One must expect that values corresponding to `vim.types.float`,
+---     `vim.types.array` and `vim.types.dictionary` fall under only two following
+---     assumptions:
+---     1. Value may serve both as a key and as a value in a table. Given the
+---        properties of Lua tables this basically means “value is not `nil`”.
+---     2. For each value in `vim.types` table `vim.types[vim.types[value]]` is the
+---        same as `value`.
+---     No other restrictions are put on types, and it is not guaranteed that
+---     values corresponding to `vim.types.float`, `vim.types.array` and
+---     `vim.types.dictionary` will not change or that `vim.types` table will only
+---     contain values for these three types.
 ---
----    Note: One must expect that values corresponding to `vim.types.float`,
----    `vim.types.array` and `vim.types.dictionary` fall under only two following
----    assumptions:
----    1. Value may serve both as a key and as a value in a table. Given the
----       properties of Lua tables this basically means “value is not `nil`”.
----    2. For each value in `vim.types` table `vim.types[vim.types[value]]` is the
----       same as `value`.
----    No other restrictions are put on types, and it is not guaranteed that
----    values corresponding to `vim.types.float`, `vim.types.array` and
----    `vim.types.dictionary` will not change or that `vim.types` table will only
----    contain values for these three types.
+---                                                    *log_levels* *vim.log.levels*
+--- Log levels are one of the values defined in `vim.log.levels`:
 ---
----                                                   *log_levels* *vim.log.levels*
----Log levels are one of the values defined in `vim.log.levels`:
+---     vim.log.levels.DEBUG
+---     vim.log.levels.ERROR
+---     vim.log.levels.INFO
+---     vim.log.levels.TRACE
+---     vim.log.levels.WARN
+---     vim.log.levels.OFF
 ---
----    vim.log.levels.DEBUG
----    vim.log.levels.ERROR
----    vim.log.levels.INFO
----    vim.log.levels.TRACE
----    vim.log.levels.WARN
----    vim.log.levels.OFF
----
----</pre>
+--- </pre>
 
+---@nodoc
 ---@class vim.NIL
 
 ---@type vim.NIL
@@ -92,9 +91,8 @@ function vim.empty_dict() end
 --- This function also works in a fast callback |lua-loop-callbacks|.
 --- @param channel integer
 --- @param method string
---- @param args? any[]
 --- @param ...? any
-function vim.rpcnotify(channel, method, args, ...) end
+function vim.rpcnotify(channel, method, ...) end
 
 --- Sends a request to {channel} to invoke {method} via |RPC| and blocks until
 --- a response is received.
@@ -103,9 +101,8 @@ function vim.rpcnotify(channel, method, args, ...) end
 --- special value
 --- @param channel integer
 --- @param method string
---- @param args? any[]
 --- @param ...? any
-function vim.rpcrequest(channel, method, args, ...) end
+function vim.rpcrequest(channel, method, ...) end
 
 --- Compares strings case-insensitively.
 --- @param a string
@@ -118,19 +115,20 @@ function vim.stricmp(a, b) end
 --- Convert UTF-32 or UTF-16 {index} to byte index. If {use_utf16} is not
 --- supplied, it defaults to false (use UTF-32). Returns the byte index.
 ---
---- Invalid UTF-8 and NUL is treated like by |vim.str_byteindex()|.
+--- Invalid UTF-8 and NUL is treated like in |vim.str_utfindex()|.
 --- An {index} in the middle of a UTF-16 sequence is rounded upwards to
 --- the end of that sequence.
 --- @param str string
---- @param index number
---- @param use_utf16? any
+--- @param index integer
+--- @param use_utf16? boolean
+--- @return integer
 function vim.str_byteindex(str, index, use_utf16) end
 
 --- Gets a list of the starting byte positions of each UTF-8 codepoint in the given string.
 ---
 --- Embedded NUL bytes are treated as terminating the string.
 --- @param str string
---- @return table
+--- @return integer[]
 function vim.str_utf_pos(str) end
 
 --- Gets the distance (in bytes) from the starting byte of the codepoint (character) that {index}
@@ -151,8 +149,8 @@ function vim.str_utf_pos(str) end
 --- ```
 ---
 --- @param str string
---- @param index number
---- @return number
+--- @param index integer
+--- @return integer
 function vim.str_utf_start(str, index) end
 
 --- Gets the distance (in bytes) from the last byte of the codepoint (character) that {index} points
@@ -171,8 +169,8 @@ function vim.str_utf_start(str, index) end
 --- ```
 ---
 --- @param str string
---- @param index number
---- @return number
+--- @param index integer
+--- @return integer
 function vim.str_utf_end(str, index) end
 
 --- Convert byte index to UTF-32 and UTF-16 indices. If {index} is not
@@ -183,7 +181,7 @@ function vim.str_utf_end(str, index) end
 --- {index} in the middle of a UTF-8 sequence is rounded upwards to the end of
 --- that sequence.
 --- @param str string
---- @param index? number
+--- @param index? integer
 --- @return integer UTF-32 index
 --- @return integer UTF-16 index
 function vim.str_utfindex(str, index) end
@@ -196,15 +194,14 @@ function vim.str_utfindex(str, index) end
 --- can accept, see ":Man 3 iconv".
 ---
 --- @param str string Text to convert
---- @param from number Encoding of {str}
---- @param to number Target encoding
---- @param opts? table<string,any>
---- @return string|nil Converted string if conversion succeeds, `nil` otherwise.
+--- @param from string Encoding of {str}
+--- @param to string Target encoding
+--- @return string? : Converted string if conversion succeeds, `nil` otherwise.
 function vim.iconv(str, from, to, opts) end
 
 --- Schedules {fn} to be invoked soon by the main event-loop. Useful
 --- to avoid |textlock| or other temporary restrictions.
---- @param fn function
+--- @param fn fun()
 function vim.schedule(fn) end
 
 --- Wait for {time} in milliseconds until {callback} returns `true`.
@@ -218,7 +215,6 @@ function vim.schedule(fn) end
 --- Examples:
 ---
 --- ```lua
----
 --- ---
 --- -- Wait for 100 ms, allowing other events to process
 --- vim.wait(100, function() end)

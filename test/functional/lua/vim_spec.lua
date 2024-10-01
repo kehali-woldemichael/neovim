@@ -1,32 +1,33 @@
 -- Test suite for testing interactions with API bindings
-local helpers = require('test.functional.helpers')(after_each)
+local t = require('test.testutil')
+local n = require('test.functional.testnvim')()
 local Screen = require('test.functional.ui.screen')
 
-local nvim_prog = helpers.nvim_prog
-local fn = helpers.fn
-local api = helpers.api
-local command = helpers.command
-local dedent = helpers.dedent
-local insert = helpers.insert
-local clear = helpers.clear
-local eq = helpers.eq
-local ok = helpers.ok
+local nvim_prog = n.nvim_prog
+local fn = n.fn
+local api = n.api
+local command = n.command
+local dedent = t.dedent
+local insert = n.insert
+local clear = n.clear
+local eq = t.eq
+local ok = t.ok
 local pesc = vim.pesc
-local eval = helpers.eval
-local feed = helpers.feed
-local pcall_err = helpers.pcall_err
-local exec_lua = helpers.exec_lua
-local matches = helpers.matches
-local exec = helpers.exec
+local eval = n.eval
+local feed = n.feed
+local pcall_err = t.pcall_err
+local exec_lua = n.exec_lua
+local matches = t.matches
+local exec = n.exec
 local NIL = vim.NIL
-local retry = helpers.retry
-local next_msg = helpers.next_msg
-local remove_trace = helpers.remove_trace
-local mkdir_p = helpers.mkdir_p
-local rmdir = helpers.rmdir
-local write_file = helpers.write_file
-local poke_eventloop = helpers.poke_eventloop
-local assert_alive = helpers.assert_alive
+local retry = t.retry
+local next_msg = n.next_msg
+local remove_trace = t.remove_trace
+local mkdir_p = n.mkdir_p
+local rmdir = n.rmdir
+local write_file = t.write_file
+local poke_eventloop = n.poke_eventloop
+local assert_alive = n.assert_alive
 
 describe('lua stdlib', function()
   before_each(clear)
@@ -128,63 +129,65 @@ describe('lua stdlib', function()
     eq(1, fn.luaeval('vim.stricmp("\\0C\\0", "\\0B\\0")'))
   end)
 
-  local function test_vim_deprecate(current_version)
+  --- @param prerel string | nil
+  local function test_vim_deprecate(prerel)
     -- vim.deprecate(name, alternative, version, plugin, backtrace)
     -- See MAINTAIN.md for the soft/hard deprecation policy
 
-    describe(('vim.deprecate [current_version = %s]'):format(current_version), function()
+    describe(('vim.deprecate prerel=%s,'):format(prerel or 'nil'), function()
+      local curver --- @type {major:number, minor:number}
+
       before_each(function()
-        -- mock vim.version() behavior, should be pinned for consistent testing
-        exec_lua(
-          [[
-            local current_version_mock = vim.version.parse(...)
-            getmetatable(vim.version).__call = function()
-              return current_version_mock
-            end
-          ]],
-          current_version
+        curver = exec_lua('return vim.version()')
+      end)
+
+      it('plugin=nil, same message skipped', function()
+        -- "0.10" or "0.10-dev+xxx"
+        local curstr = ('%s.%s%s'):format(curver.major, curver.minor, prerel or '')
+        eq(
+          ([[foo.bar() is deprecated. Run ":checkhealth vim.deprecated" for more information]]):format(
+            curstr
+          ),
+          exec_lua('return vim.deprecate(...)', 'foo.bar()', 'zub.wooo{ok=yay}', curstr)
+        )
+        -- Same message as above; skipped this time.
+        eq(vim.NIL, exec_lua('return vim.deprecate(...)', 'foo.bar()', 'zub.wooo{ok=yay}', curstr))
+      end)
+
+      it('plugin=nil, no error if soft-deprecated', function()
+        eq(
+          vim.NIL,
+          exec_lua('return vim.deprecate(...)', 'foo.baz()', 'foo.better_baz()', '0.99.0')
         )
       end)
 
-      it('when plugin = nil', function()
-        eq(
-          dedent [[
-            foo.bar() is deprecated, use zub.wooo{ok=yay} instead. :help deprecated
-            This feature will be removed in Nvim version 0.10]],
-          exec_lua('return vim.deprecate(...)', 'foo.bar()', 'zub.wooo{ok=yay}', '0.10')
-        )
-        -- Same message, skipped.
-        eq(vim.NIL, exec_lua('return vim.deprecate(...)', 'foo.bar()', 'zub.wooo{ok=yay}', '0.10'))
+      it('plugin=nil, show error if hard-deprecated', function()
+        -- "0.10" or "0.11"
+        local nextver = ('%s.%s'):format(curver.major, curver.minor + (prerel and 0 or 1))
 
-        -- Don't show error if not hard-deprecated (only soft-deprecated)
+        local was_removed = prerel and 'was removed' or 'will be removed'
         eq(
-          vim.NIL,
-          exec_lua('return vim.deprecate(...)', 'foo.baz()', 'foo.better_baz()', '0.12.0')
+          dedent(
+            [[
+            foo.hard_dep() is deprecated. Run ":checkhealth vim.deprecated" for more information]]
+          ):format(was_removed, nextver),
+          exec_lua('return vim.deprecate(...)', 'foo.hard_dep()', 'vim.new_api()', nextver)
         )
+      end)
 
-        -- Show error if hard-deprecated
+      it('plugin=nil, to be deleted in the next major version (1.0)', function()
         eq(
-          dedent [[
-            foo.hard_dep() is deprecated, use vim.new_api() instead. :help deprecated
-            This feature will be removed in Nvim version 0.11]],
-          exec_lua('return vim.deprecate(...)', 'foo.hard_dep()', 'vim.new_api()', '0.11')
-        )
-
-        -- To be deleted in the next major version (1.0)
-        eq(
-          dedent [[
-            foo.baz() is deprecated. :help deprecated
-            This feature will be removed in Nvim version 1.0]],
+          [[foo.baz() is deprecated. Run ":checkhealth vim.deprecated" for more information]],
           exec_lua [[ return vim.deprecate('foo.baz()', nil, '1.0') ]]
         )
       end)
 
-      it('when plugin is specified', function()
+      it('plugin specified', function()
         -- When `plugin` is specified, don't show ":help deprecated". #22235
         eq(
           dedent [[
             foo.bar() is deprecated, use zub.wooo{ok=yay} instead.
-            This feature will be removed in my-plugin.nvim version 0.3.0]],
+            Feature will be removed in my-plugin.nvim 0.3.0]],
           exec_lua(
             'return vim.deprecate(...)',
             'foo.bar()',
@@ -199,7 +202,7 @@ describe('lua stdlib', function()
         eq(
           dedent [[
             foo.bar() is deprecated, use zub.wooo{ok=yay} instead.
-            This feature will be removed in my-plugin.nvim version 0.11.0]],
+            Feature will be removed in my-plugin.nvim 0.11.0]],
           exec_lua(
             'return vim.deprecate(...)',
             'foo.bar()',
@@ -213,8 +216,8 @@ describe('lua stdlib', function()
     end)
   end
 
-  test_vim_deprecate('0.10')
-  test_vim_deprecate('0.10-dev+g0000000')
+  test_vim_deprecate()
+  test_vim_deprecate('-dev+g0000000')
 
   it('vim.startswith', function()
     eq(true, fn.luaeval('vim.startswith("123", "1")'))
@@ -535,12 +538,6 @@ describe('lua stdlib', function()
     matches('big failure\nvery async', remove_trace(eval('v:errmsg')))
 
     local screen = Screen.new(60, 5)
-    screen:set_default_attr_ids({
-      [1] = { bold = true, foreground = Screen.colors.Blue1 },
-      [2] = { bold = true, reverse = true },
-      [3] = { foreground = Screen.colors.Grey100, background = Screen.colors.Red },
-      [4] = { bold = true, foreground = Screen.colors.SeaGreen4 },
-    })
     screen:attach()
     screen:expect {
       grid = [[
@@ -559,11 +556,11 @@ describe('lua stdlib', function()
     ]])
     screen:expect {
       grid = [[
-      {3:stack traceback:}                                            |
-      {3:        [C]: in function 'nvim_command'}                     |
-      {3:        [string "<nvim>"]:2: in function <[string "<nvim>"]:}|
-      {3:1>}                                                          |
-      {4:Press ENTER or type command to continue}^                     |
+      {9:stack traceback:}                                            |
+      {9:        [C]: in function 'nvim_command'}                     |
+      {9:        [string "<nvim>"]:2: in function <[string "<nvim>"]:}|
+      {9:1>}                                                          |
+      {6:Press ENTER or type command to continue}^                     |
     ]],
     }
   end)
@@ -592,8 +589,8 @@ describe('lua stdlib', function()
       { 'x*yz*oo*l', '*', true, false, { 'x', 'yz', 'oo', 'l' } },
     }
 
-    for _, t in ipairs(tests) do
-      eq(t[5], vim.split(t[1], t[2], { plain = t[3], trimempty = t[4] }), t[1])
+    for _, q in ipairs(tests) do
+      eq(q[5], vim.split(q[1], q[2], { plain = q[3], trimempty = q[4] }), q[1])
     end
 
     -- Test old signature
@@ -603,8 +600,8 @@ describe('lua stdlib', function()
       { 'abc', '.-' },
     }
 
-    for _, t in ipairs(loops) do
-      matches('Infinite loop detected', pcall_err(vim.split, t[1], t[2]))
+    for _, q in ipairs(loops) do
+      matches('Infinite loop detected', pcall_err(vim.split, q[1], q[2]))
     end
 
     -- Validates args.
@@ -626,8 +623,8 @@ describe('lua stdlib', function()
       { 'r\n', 'r' },
     }
 
-    for _, t in ipairs(trims) do
-      assert(t[2], trim(t[1]))
+    for _, q in ipairs(trims) do
+      assert(q[2], trim(q[1]))
     end
 
     -- Validates args.
@@ -636,8 +633,8 @@ describe('lua stdlib', function()
 
   it('vim.inspect', function()
     -- just make sure it basically works, it has its own test suite
-    local inspect = function(t, opts)
-      return exec_lua('return vim.inspect(...)', t, opts)
+    local inspect = function(q, opts)
+      return exec_lua('return vim.inspect(...)', q, opts)
     end
 
     eq('2', inspect(2))
@@ -670,21 +667,21 @@ describe('lua stdlib', function()
       local a = {}
       local b = vim.deepcopy(a)
 
-      return vim.tbl_islist(b) and vim.tbl_count(b) == 0 and tostring(a) ~= tostring(b)
+      return vim.islist(b) and vim.tbl_count(b) == 0 and tostring(a) ~= tostring(b)
     ]]))
 
     ok(exec_lua([[
       local a = vim.empty_dict()
       local b = vim.deepcopy(a)
 
-      return not vim.tbl_islist(b) and vim.tbl_count(b) == 0
+      return not vim.islist(b) and vim.tbl_count(b) == 0
     ]]))
 
     ok(exec_lua([[
       local a = {x = vim.empty_dict(), y = {}}
       local b = vim.deepcopy(a)
 
-      return not vim.tbl_islist(b.x) and vim.tbl_islist(b.y)
+      return not vim.islist(b.x) and vim.islist(b.y)
         and vim.tbl_count(b) == 2
         and tostring(a) ~= tostring(b)
     ]]))
@@ -822,30 +819,30 @@ describe('lua stdlib', function()
     )
   end)
 
-  it('vim.tbl_isarray', function()
-    eq(true, exec_lua('return vim.tbl_isarray({})'))
-    eq(false, exec_lua('return vim.tbl_isarray(vim.empty_dict())'))
-    eq(true, exec_lua("return vim.tbl_isarray({'a', 'b', 'c'})"))
-    eq(false, exec_lua("return vim.tbl_isarray({'a', '32', a='hello', b='baz'})"))
-    eq(false, exec_lua("return vim.tbl_isarray({1, a='hello', b='baz'})"))
-    eq(false, exec_lua("return vim.tbl_isarray({a='hello', b='baz', 1})"))
-    eq(false, exec_lua("return vim.tbl_isarray({1, 2, nil, a='hello'})"))
-    eq(true, exec_lua('return vim.tbl_isarray({1, 2, nil, 4})'))
-    eq(true, exec_lua('return vim.tbl_isarray({nil, 2, 3, 4})'))
-    eq(false, exec_lua('return vim.tbl_isarray({1, [1.5]=2, [3]=3})'))
+  it('vim.isarray', function()
+    eq(true, exec_lua('return vim.isarray({})'))
+    eq(false, exec_lua('return vim.isarray(vim.empty_dict())'))
+    eq(true, exec_lua("return vim.isarray({'a', 'b', 'c'})"))
+    eq(false, exec_lua("return vim.isarray({'a', '32', a='hello', b='baz'})"))
+    eq(false, exec_lua("return vim.isarray({1, a='hello', b='baz'})"))
+    eq(false, exec_lua("return vim.isarray({a='hello', b='baz', 1})"))
+    eq(false, exec_lua("return vim.isarray({1, 2, nil, a='hello'})"))
+    eq(true, exec_lua('return vim.isarray({1, 2, nil, 4})'))
+    eq(true, exec_lua('return vim.isarray({nil, 2, 3, 4})'))
+    eq(false, exec_lua('return vim.isarray({1, [1.5]=2, [3]=3})'))
   end)
 
-  it('vim.tbl_islist', function()
-    eq(true, exec_lua('return vim.tbl_islist({})'))
-    eq(false, exec_lua('return vim.tbl_islist(vim.empty_dict())'))
-    eq(true, exec_lua("return vim.tbl_islist({'a', 'b', 'c'})"))
-    eq(false, exec_lua("return vim.tbl_islist({'a', '32', a='hello', b='baz'})"))
-    eq(false, exec_lua("return vim.tbl_islist({1, a='hello', b='baz'})"))
-    eq(false, exec_lua("return vim.tbl_islist({a='hello', b='baz', 1})"))
-    eq(false, exec_lua("return vim.tbl_islist({1, 2, nil, a='hello'})"))
-    eq(false, exec_lua('return vim.tbl_islist({1, 2, nil, 4})'))
-    eq(false, exec_lua('return vim.tbl_islist({nil, 2, 3, 4})'))
-    eq(false, exec_lua('return vim.tbl_islist({1, [1.5]=2, [3]=3})'))
+  it('vim.islist', function()
+    eq(true, exec_lua('return vim.islist({})'))
+    eq(false, exec_lua('return vim.islist(vim.empty_dict())'))
+    eq(true, exec_lua("return vim.islist({'a', 'b', 'c'})"))
+    eq(false, exec_lua("return vim.islist({'a', '32', a='hello', b='baz'})"))
+    eq(false, exec_lua("return vim.islist({1, a='hello', b='baz'})"))
+    eq(false, exec_lua("return vim.islist({a='hello', b='baz', 1})"))
+    eq(false, exec_lua("return vim.islist({1, 2, nil, a='hello'})"))
+    eq(false, exec_lua('return vim.islist({1, 2, nil, 4})'))
+    eq(false, exec_lua('return vim.islist({nil, 2, 3, 4})'))
+    eq(false, exec_lua('return vim.islist({1, [1.5]=2, [3]=3})'))
   end)
 
   it('vim.tbl_isempty', function()
@@ -918,7 +915,7 @@ describe('lua stdlib', function()
       local b = {}
       local c = vim.tbl_extend("keep", a, b)
 
-      return not vim.tbl_islist(c) and vim.tbl_count(c) == 0
+      return not vim.islist(c) and vim.tbl_count(c) == 0
     ]]))
 
     ok(exec_lua([[
@@ -926,7 +923,7 @@ describe('lua stdlib', function()
       local b = vim.empty_dict()
       local c = vim.tbl_extend("keep", a, b)
 
-      return vim.tbl_islist(c) and vim.tbl_count(c) == 0
+      return vim.islist(c) and vim.tbl_count(c) == 0
     ]]))
 
     ok(exec_lua([[
@@ -1026,7 +1023,7 @@ describe('lua stdlib', function()
       local count = 0
       for _ in pairs(c) do count = count + 1 end
 
-      return not vim.tbl_islist(c) and count == 0
+      return not vim.islist(c) and count == 0
     ]]))
 
     ok(exec_lua([[
@@ -1037,7 +1034,7 @@ describe('lua stdlib', function()
       local count = 0
       for _ in pairs(c) do count = count + 1 end
 
-      return vim.tbl_islist(c) and count == 0
+      return vim.islist(c) and count == 0
     ]]))
 
     eq(
@@ -1062,7 +1059,7 @@ describe('lua stdlib', function()
       local a = { a = {[2] = 3} }
       local b = { a = {[3] = 3} }
       local c = vim.tbl_deep_extend("force", a, b)
-      return vim.deep_equal(c, {a = {[3] = 3}})
+      return vim.deep_equal(c, {a = {[2] = 3, [3] = 3}})
     ]]))
 
     eq(
@@ -1074,34 +1071,28 @@ describe('lua stdlib', function()
     ]])
     )
 
-    matches(
-      'invalid "behavior": nil',
-      pcall_err(
-        exec_lua,
-        [[
-        return vim.tbl_deep_extend()
-      ]]
-      )
-    )
+    ok(exec_lua([[
+      local a = { sub = { 'a', 'b' } }
+      local b = { sub = { 'b', 'c' } }
+      local c = vim.tbl_deep_extend('force', a, b)
+      return vim.deep_equal(c, { sub = { 'b', 'c' } })
+    ]]))
+
+    matches('invalid "behavior": nil', pcall_err(exec_lua, [[return vim.tbl_deep_extend()]]))
 
     matches(
       'wrong number of arguments %(given 1, expected at least 3%)',
-      pcall_err(
-        exec_lua,
-        [[
-        return vim.tbl_deep_extend("keep")
-      ]]
-      )
+      pcall_err(exec_lua, [[return vim.tbl_deep_extend("keep")]])
     )
 
     matches(
       'wrong number of arguments %(given 2, expected at least 3%)',
-      pcall_err(
-        exec_lua,
-        [[
-        return vim.tbl_deep_extend("keep", {})
-      ]]
-      )
+      pcall_err(exec_lua, [[return vim.tbl_deep_extend("keep", {})]])
+    )
+
+    matches(
+      'after the second argument%: expected table, got number',
+      pcall_err(exec_lua, [[return vim.tbl_deep_extend("keep", {}, 42)]])
     )
   end)
 
@@ -1200,8 +1191,7 @@ describe('lua stdlib', function()
     ]])
     eq(true, exec_lua([[return next(vim.fn.FooFunc(3)) == nil ]]))
     eq(3, eval('g:test'))
-    -- compat: nvim_call_function uses "special" value for empty dict
-    eq(true, exec_lua([[return next(vim.api.nvim_call_function("FooFunc", {5})) == true ]]))
+    eq(true, exec_lua([[return vim.tbl_isempty(vim.api.nvim_call_function("FooFunc", {5}))]]))
     eq(5, eval('g:test'))
 
     eq({ 2, 'foo', true }, exec_lua([[return vim.fn.VarArg(2, "foo", true)]]))
@@ -1239,7 +1229,7 @@ describe('lua stdlib', function()
     )
   end)
 
-  it('vim.fn should error when calling API function', function()
+  it('vim.fn errors when calling API function', function()
     matches(
       'Tried to call API function with vim.fn: use vim.api.nvim_get_current_line instead',
       pcall_err(exec_lua, 'vim.fn.nvim_get_current_line()')
@@ -1282,7 +1272,7 @@ describe('lua stdlib', function()
       vim.rpcrequest(chan, 'nvim_exec', 'let xx = {}\nlet yy = []', false)
       local dict = vim.rpcrequest(chan, 'nvim_eval', 'xx')
       local list = vim.rpcrequest(chan, 'nvim_eval', 'yy')
-      return {dict, list, vim.tbl_islist(dict), vim.tbl_islist(list)}
+      return {dict, list, vim.islist(dict), vim.islist(list)}
      ]])
     )
 
@@ -1314,12 +1304,6 @@ describe('lua stdlib', function()
     end)
 
     local screen = Screen.new(50, 7)
-    screen:set_default_attr_ids({
-      [1] = { bold = true, foreground = Screen.colors.Blue1 },
-      [2] = { bold = true, reverse = true },
-      [3] = { foreground = Screen.colors.Grey100, background = Screen.colors.Red },
-      [4] = { bold = true, foreground = Screen.colors.SeaGreen4 },
-    })
     screen:attach()
     exec_lua([[
       timer = vim.uv.new_timer()
@@ -1332,13 +1316,13 @@ describe('lua stdlib', function()
     ]])
     screen:expect {
       grid = [[
-      {3:[string "<nvim>"]:6: E5560: rpcrequest must not be}|
-      {3: called in a lua loop callback}                    |
-      {3:stack traceback:}                                  |
-      {3:        [C]: in function 'rpcrequest'}             |
-      {3:        [string "<nvim>"]:6: in function <[string }|
-      {3:"<nvim>"]:2>}                                      |
-      {4:Press ENTER or type command to continue}^           |
+      {9:[string "<nvim>"]:6: E5560: rpcrequest must not be}|
+      {9: called in a lua loop callback}                    |
+      {9:stack traceback:}                                  |
+      {9:        [C]: in function 'rpcrequest'}             |
+      {9:        [string "<nvim>"]:6: in function <[string }|
+      {9:"<nvim>"]:2>}                                      |
+      {6:Press ENTER or type command to continue}^           |
     ]],
     }
     feed('<cr>')
@@ -1355,7 +1339,7 @@ describe('lua stdlib', function()
       vim.api.nvim_set_var('dicty', vim.empty_dict())
       local listy = vim.fn.eval("listy")
       local dicty = vim.fn.eval("dicty")
-      return {vim.tbl_islist(listy), vim.tbl_islist(dicty), next(listy) == nil, next(dicty) == nil}
+      return {vim.islist(listy), vim.islist(dicty), next(listy) == nil, next(dicty) == nil}
     ]])
     )
 
@@ -1408,7 +1392,25 @@ describe('lua stdlib', function()
     exec_lua("vim.validate{arg1={{}, 't' }, arg2={ 'foo', 's' }}")
     exec_lua("vim.validate{arg1={2, function(a) return (a % 2) == 0  end, 'even number' }}")
     exec_lua("vim.validate{arg1={5, {'n', 's'} }, arg2={ 'foo', {'n', 's'} }}")
+    vim.validate('arg1', 5, 'number')
+    vim.validate('arg1', '5', 'string')
+    vim.validate('arg1', { 5 }, 'table')
+    vim.validate('arg1', function()
+      return 5
+    end, 'function')
+    vim.validate('arg1', nil, 'number', true)
+    vim.validate('arg1', nil, 'string', true)
+    vim.validate('arg1', nil, 'table', true)
+    vim.validate('arg1', nil, 'function', true)
 
+    matches('arg1: expected number, got nil', pcall_err(vim.validate, 'arg1', nil, 'number'))
+    matches('arg1: expected string, got nil', pcall_err(vim.validate, 'arg1', nil, 'string'))
+    matches('arg1: expected table, got nil', pcall_err(vim.validate, 'arg1', nil, 'table'))
+    matches('arg1: expected function, got nil', pcall_err(vim.validate, 'arg1', nil, 'function'))
+    matches('arg1: expected string, got number', pcall_err(vim.validate, 'arg1', 5, 'string'))
+    matches('arg1: expected table, got number', pcall_err(vim.validate, 'arg1', 5, 'table'))
+    matches('arg1: expected function, got number', pcall_err(vim.validate, 'arg1', 5, 'function'))
+    matches('arg1: expected number, got string', pcall_err(vim.validate, 'arg1', '5', 'number'))
     matches('expected table, got number', pcall_err(exec_lua, "vim.validate{ 1, 'x' }"))
     matches('invalid type name: x', pcall_err(exec_lua, "vim.validate{ arg1={ 1, 'x' }}"))
     matches('invalid type name: 1', pcall_err(exec_lua, 'vim.validate{ arg1={ 1, 1 }}'))
@@ -1472,6 +1474,60 @@ describe('lua stdlib', function()
     ]])
     )
 
+    eq(
+      { false, false },
+      exec_lua([[
+      local meta = { __call = {} }
+      assert(meta.__call)
+      local function new()
+        return setmetatable({}, meta)
+      end
+      local not_callable = new()
+      return { pcall(function() not_callable() end), vim.is_callable(not_callable) }
+    ]])
+    )
+    eq(
+      { false, false },
+      exec_lua([[
+      local function new()
+        return { __call = function()end }
+      end
+      local not_callable = new()
+      assert(not_callable.__call)
+      return { pcall(function() not_callable() end), vim.is_callable(not_callable) }
+    ]])
+    )
+    eq(
+      { false, false },
+      exec_lua([[
+      local meta = setmetatable(
+        { __index = { __call = function() end } },
+        { __index = { __call = function() end } }
+      )
+      assert(meta.__call)
+      local not_callable = setmetatable({}, meta)
+      assert(not_callable.__call)
+      return { pcall(function() not_callable() end), vim.is_callable(not_callable) }
+    ]])
+    )
+    eq(
+      { false, false },
+      exec_lua([[
+      local meta = setmetatable({
+        __index = function()
+          return function() end
+        end,
+      }, {
+        __index = function()
+          return function() end
+        end,
+      })
+      assert(meta.__call)
+      local not_callable = setmetatable({}, meta)
+      assert(not_callable.__call)
+      return { pcall(function() not_callable() end), vim.is_callable(not_callable) }
+    ]])
+    )
     eq(false, exec_lua('return vim.is_callable(1)'))
     eq(false, exec_lua("return vim.is_callable('foo')"))
     eq(false, exec_lua('return vim.is_callable({})'))
@@ -1569,7 +1625,7 @@ describe('lua stdlib', function()
     eq(NIL, exec_lua([[return vim.g.Unknown_script_func]]))
 
     -- Check if autoload works properly
-    local pathsep = helpers.get_pathsep()
+    local pathsep = n.get_pathsep()
     local xconfig = 'Xhome' .. pathsep .. 'Xconfig'
     local xdata = 'Xhome' .. pathsep .. 'Xdata'
     local autoload_folder = table.concat({ xconfig, 'nvim', 'autoload' }, pathsep)
@@ -1891,7 +1947,7 @@ describe('lua stdlib', function()
     eq(NIL, fn.luaeval 'vim.v.null')
     matches([[attempt to index .* nil value]], pcall_err(exec_lua, 'return vim.v[0].progpath'))
     eq('Key is read-only: count', pcall_err(exec_lua, [[vim.v.count = 42]]))
-    eq('Dictionary is locked', pcall_err(exec_lua, [[vim.v.nosuchvar = 42]]))
+    eq('Dict is locked', pcall_err(exec_lua, [[vim.v.nosuchvar = 42]]))
     eq('Key is fixed: errmsg', pcall_err(exec_lua, [[vim.v.errmsg = nil]]))
     exec_lua([[vim.v.errmsg = 'set by Lua']])
     eq('set by Lua', eval('v:errmsg'))
@@ -1919,16 +1975,12 @@ describe('lua stdlib', function()
     eq({ 1, 5 }, api.nvim_win_get_cursor(0))
 
     local screen = Screen.new(60, 3)
-    screen:set_default_attr_ids({
-      [0] = { bold = true, foreground = Screen.colors.Blue },
-      [1] = { background = Screen.colors.Yellow },
-    })
     screen:attach()
     eq(1, eval('v:hlsearch'))
     screen:expect {
       grid = [[
-       {1:foo} {1:^foo} {1:foo}                                                |
-      {0:~                                                           }|
+       {10:foo} {10:^foo} {10:foo}                                                |
+      {1:~                                                           }|
                                                                   |
     ]],
     }
@@ -1937,7 +1989,7 @@ describe('lua stdlib', function()
     screen:expect {
       grid = [[
        foo ^foo foo                                                |
-      {0:~                                                           }|
+      {1:~                                                           }|
                                                                   |
     ]],
     }
@@ -1945,8 +1997,8 @@ describe('lua stdlib', function()
     eq(1, eval('v:hlsearch'))
     screen:expect {
       grid = [[
-       {1:foo} {1:^foo} {1:foo}                                                |
-      {0:~                                                           }|
+       {10:foo} {10:^foo} {10:foo}                                                |
+      {1:~                                                           }|
                                                                   |
     ]],
     }
@@ -2005,21 +2057,25 @@ describe('lua stdlib', function()
     vim.cmd "enew"
     ]]
     eq(100, fn.luaeval 'vim.wo.scrolloff')
+
+    matches('only bufnr=0 is supported', pcall_err(exec_lua, 'vim.wo[0][10].signcolumn = "no"'))
+
+    matches('only bufnr=0 is supported', pcall_err(exec_lua, 'local a = vim.wo[0][10].signcolumn'))
   end)
 
   describe('vim.opt', function()
     -- TODO: We still need to write some tests for optlocal, opt and then getting the options
     --  Probably could also do some stuff with getting things from viml side as well to confirm behavior is the same.
 
-    it('should allow setting number values', function()
+    it('allows setting number values', function()
       local scrolloff = exec_lua [[
         vim.opt.scrolloff = 10
         return vim.o.scrolloff
       ]]
-      eq(scrolloff, 10)
+      eq(10, scrolloff)
     end)
 
-    pending('should handle STUPID window things', function()
+    pending('handles STUPID window things', function()
       local result = exec_lua [[
         local result = {}
 
@@ -2032,23 +2088,23 @@ describe('lua stdlib', function()
       eq({}, result)
     end)
 
-    it('should allow setting tables', function()
+    it('allows setting tables', function()
       local wildignore = exec_lua [[
         vim.opt.wildignore = { 'hello', 'world' }
         return vim.o.wildignore
       ]]
-      eq(wildignore, 'hello,world')
+      eq('hello,world', wildignore)
     end)
 
-    it('should allow setting tables with shortnames', function()
+    it('allows setting tables with shortnames', function()
       local wildignore = exec_lua [[
         vim.opt.wig = { 'hello', 'world' }
         return vim.o.wildignore
       ]]
-      eq(wildignore, 'hello,world')
+      eq('hello,world', wildignore)
     end)
 
-    it('should error when you attempt to set string values to numeric options', function()
+    it('errors when you attempt to set string values to numeric options', function()
       local result = exec_lua [[
         return {
           pcall(function() vim.opt.textwidth = 'hello world' end)
@@ -2058,7 +2114,7 @@ describe('lua stdlib', function()
       eq(false, result[1])
     end)
 
-    it('should error when you attempt to setlocal a global value', function()
+    it('errors when you attempt to setlocal a global value', function()
       local result = exec_lua [[
         return pcall(function() vim.opt_local.clipboard = "hello" end)
       ]]
@@ -2066,7 +2122,7 @@ describe('lua stdlib', function()
       eq(false, result)
     end)
 
-    it('should allow you to set boolean values', function()
+    it('allows you to set boolean values', function()
       eq(
         { true, false, true },
         exec_lua [[
@@ -2086,7 +2142,7 @@ describe('lua stdlib', function()
       )
     end)
 
-    it('should change current buffer values and defaults for global local values', function()
+    it('changes current buffer values and defaults for global local values', function()
       local result = exec_lua [[
         local result = {}
 
@@ -2125,7 +2181,7 @@ describe('lua stdlib', function()
       eq('', result[8])
     end)
 
-    it('should allow you to retrieve window opts even if they have not been set', function()
+    it('allows you to retrieve window opts even if they have not been set', function()
       local result = exec_lua [[
         local result = {}
         table.insert(result, vim.opt.number:get())
@@ -2140,7 +2196,7 @@ describe('lua stdlib', function()
       eq({ false, false, true, true }, result)
     end)
 
-    it('should allow all sorts of string manipulation', function()
+    it('allows all sorts of string manipulation', function()
       eq(
         { 'hello', 'hello world', 'start hello world' },
         exec_lua [[
@@ -2161,7 +2217,7 @@ describe('lua stdlib', function()
     end)
 
     describe('option:get()', function()
-      it('should work for boolean values', function()
+      it('works for boolean values', function()
         eq(
           false,
           exec_lua [[
@@ -2171,7 +2227,7 @@ describe('lua stdlib', function()
         )
       end)
 
-      it('should work for number values', function()
+      it('works for number values', function()
         local tabstop = exec_lua [[
           vim.opt.tabstop = 10
           return vim.opt.tabstop:get()
@@ -2180,7 +2236,7 @@ describe('lua stdlib', function()
         eq(10, tabstop)
       end)
 
-      it('should work for string values', function()
+      it('works for string values', function()
         eq(
           'hello world',
           exec_lua [[
@@ -2190,7 +2246,7 @@ describe('lua stdlib', function()
         )
       end)
 
-      it('should work for set type flaglists', function()
+      it('works for set type flaglists', function()
         local formatoptions = exec_lua [[
           vim.opt.formatoptions = 'tcro'
           return vim.opt.formatoptions:get()
@@ -2200,7 +2256,7 @@ describe('lua stdlib', function()
         eq(true, not formatoptions.q)
       end)
 
-      it('should work for set type flaglists', function()
+      it('works for set type flaglists', function()
         local formatoptions = exec_lua [[
           vim.opt.formatoptions = { t = true, c = true, r = true, o = true }
           return vim.opt.formatoptions:get()
@@ -2210,7 +2266,7 @@ describe('lua stdlib', function()
         eq(true, not formatoptions.q)
       end)
 
-      it('should work for array list type options', function()
+      it('works for array list type options', function()
         local wildignore = exec_lua [[
           vim.opt.wildignore = "*.c,*.o,__pycache__"
           return vim.opt.wildignore:get()
@@ -2220,7 +2276,7 @@ describe('lua stdlib', function()
         eq('*.c', wildignore[1])
       end)
 
-      it('should work for options that are both commalist and flaglist', function()
+      it('works for options that are both commalist and flaglist', function()
         local result = exec_lua [[
           vim.opt.whichwrap = "b,s"
           return vim.opt.whichwrap:get()
@@ -2236,7 +2292,7 @@ describe('lua stdlib', function()
         eq({ b = true, h = true }, result)
       end)
 
-      it('should work for key-value pair options', function()
+      it('works for key-value pair options', function()
         local listchars = exec_lua [[
           vim.opt.listchars = "tab:> ,space:_"
           return vim.opt.listchars:get()
@@ -2248,7 +2304,7 @@ describe('lua stdlib', function()
         }, listchars)
       end)
 
-      it('should allow you to add numeric options', function()
+      it('allows you to add numeric options', function()
         eq(
           16,
           exec_lua [[
@@ -2259,7 +2315,7 @@ describe('lua stdlib', function()
         )
       end)
 
-      it('should allow you to subtract numeric options', function()
+      it('allows you to subtract numeric options', function()
         eq(
           2,
           exec_lua [[
@@ -2272,7 +2328,7 @@ describe('lua stdlib', function()
     end)
 
     describe('key:value style options', function()
-      it('should handle dictionary style', function()
+      it('handles dict style', function()
         local listchars = exec_lua [[
           vim.opt.listchars = {
             eol = "~",
@@ -2284,7 +2340,7 @@ describe('lua stdlib', function()
         eq('eol:~,space:.', listchars)
       end)
 
-      it('should allow adding dictionary style', function()
+      it('allows adding dict style', function()
         local listchars = exec_lua [[
           vim.opt.listchars = {
             eol = "~",
@@ -2299,7 +2355,7 @@ describe('lua stdlib', function()
         eq('eol:~,space:-', listchars)
       end)
 
-      it('should allow adding dictionary style', function()
+      it('allows adding dict style', function()
         local listchars = exec_lua [[
           vim.opt.listchars = {
             eol = "~",
@@ -2313,7 +2369,7 @@ describe('lua stdlib', function()
         eq('eol:~,space:_', listchars)
       end)
 
-      it('should allow completely new keys', function()
+      it('allows completely new keys', function()
         local listchars = exec_lua [[
           vim.opt.listchars = {
             eol = "~",
@@ -2327,7 +2383,7 @@ describe('lua stdlib', function()
         eq('eol:~,space:.,tab:>>>', listchars)
       end)
 
-      it('should allow subtracting dictionary style', function()
+      it('allows subtracting dict style', function()
         local listchars = exec_lua [[
           vim.opt.listchars = {
             eol = "~",
@@ -2341,7 +2397,7 @@ describe('lua stdlib', function()
         eq('eol:~', listchars)
       end)
 
-      it('should allow subtracting dictionary style', function()
+      it('allows subtracting dict style', function()
         local listchars = exec_lua [[
           vim.opt.listchars = {
             eol = "~",
@@ -2355,7 +2411,7 @@ describe('lua stdlib', function()
         eq('', listchars)
       end)
 
-      it('should allow subtracting dictionary style multiple times', function()
+      it('allows subtracting dict style multiple times', function()
         local listchars = exec_lua [[
           vim.opt.listchars = {
             eol = "~",
@@ -2369,7 +2425,7 @@ describe('lua stdlib', function()
         eq('eol:~', listchars)
       end)
 
-      it('should allow adding a key:value string to a listchars', function()
+      it('allows adding a key:value string to a listchars', function()
         local listchars = exec_lua [[
           vim.opt.listchars = {
             eol = "~",
@@ -2383,7 +2439,7 @@ describe('lua stdlib', function()
         eq('eol:~,space:.,tab:>~', listchars)
       end)
 
-      it('should allow prepending a key:value string to a listchars', function()
+      it('allows prepending a key:value string to a listchars', function()
         local listchars = exec_lua [[
           vim.opt.listchars = {
             eol = "~",
@@ -2398,7 +2454,7 @@ describe('lua stdlib', function()
       end)
     end)
 
-    it('should automatically set when calling remove', function()
+    it('automatically sets when calling remove', function()
       eq(
         'foo,baz',
         exec_lua [[
@@ -2410,7 +2466,7 @@ describe('lua stdlib', function()
       )
     end)
 
-    it('should automatically set when calling remove with a table', function()
+    it('automatically sets when calling remove with a table', function()
       eq(
         'foo',
         exec_lua [[
@@ -2422,7 +2478,7 @@ describe('lua stdlib', function()
       )
     end)
 
-    it('should automatically set when calling append', function()
+    it('automatically sets when calling append', function()
       eq(
         'foo,bar,baz,bing',
         exec_lua [[
@@ -2434,7 +2490,7 @@ describe('lua stdlib', function()
       )
     end)
 
-    it('should automatically set when calling append with a table', function()
+    it('automatically sets when calling append with a table', function()
       eq(
         'foo,bar,baz,bing,zap',
         exec_lua [[
@@ -2446,70 +2502,70 @@ describe('lua stdlib', function()
       )
     end)
 
-    it('should allow adding tables', function()
+    it('allows adding tables', function()
       local wildignore = exec_lua [[
         vim.opt.wildignore = 'foo'
         return vim.o.wildignore
       ]]
-      eq(wildignore, 'foo')
+      eq('foo', wildignore)
 
       wildignore = exec_lua [[
         vim.opt.wildignore = vim.opt.wildignore + { 'bar', 'baz' }
         return vim.o.wildignore
       ]]
-      eq(wildignore, 'foo,bar,baz')
+      eq('foo,bar,baz', wildignore)
     end)
 
-    it('should handle adding duplicates', function()
+    it('handles adding duplicates', function()
       local wildignore = exec_lua [[
         vim.opt.wildignore = 'foo'
         return vim.o.wildignore
       ]]
-      eq(wildignore, 'foo')
+      eq('foo', wildignore)
 
       wildignore = exec_lua [[
         vim.opt.wildignore = vim.opt.wildignore + { 'bar', 'baz' }
         return vim.o.wildignore
       ]]
-      eq(wildignore, 'foo,bar,baz')
+      eq('foo,bar,baz', wildignore)
 
       wildignore = exec_lua [[
         vim.opt.wildignore = vim.opt.wildignore + { 'bar', 'baz' }
         return vim.o.wildignore
       ]]
-      eq(wildignore, 'foo,bar,baz')
+      eq('foo,bar,baz', wildignore)
     end)
 
-    it('should allow adding multiple times', function()
+    it('allows adding multiple times', function()
       local wildignore = exec_lua [[
         vim.opt.wildignore = 'foo'
         vim.opt.wildignore = vim.opt.wildignore + 'bar' + 'baz'
         return vim.o.wildignore
       ]]
-      eq(wildignore, 'foo,bar,baz')
+      eq('foo,bar,baz', wildignore)
     end)
 
-    it('should remove values when you use minus', function()
+    it('removes values when you use minus', function()
       local wildignore = exec_lua [[
         vim.opt.wildignore = 'foo'
         return vim.o.wildignore
       ]]
-      eq(wildignore, 'foo')
+      eq('foo', wildignore)
 
       wildignore = exec_lua [[
         vim.opt.wildignore = vim.opt.wildignore + { 'bar', 'baz' }
         return vim.o.wildignore
       ]]
-      eq(wildignore, 'foo,bar,baz')
+      eq('foo,bar,baz', wildignore)
 
       wildignore = exec_lua [[
         vim.opt.wildignore = vim.opt.wildignore - 'bar'
         return vim.o.wildignore
       ]]
-      eq(wildignore, 'foo,baz')
+      eq('foo,baz', wildignore)
     end)
 
-    it('should prepend values when using ^', function()
+    it('prepends values when using ^', function()
       local wildignore = exec_lua [[
         vim.opt.wildignore = 'foo'
         vim.opt.wildignore = vim.opt.wildignore ^ 'first'
@@ -2521,20 +2577,20 @@ describe('lua stdlib', function()
         vim.opt.wildignore = vim.opt.wildignore ^ 'super_first'
         return vim.o.wildignore
       ]]
-      eq(wildignore, 'super_first,first,foo')
+      eq('super_first,first,foo', wildignore)
     end)
 
-    it('should not remove duplicates from wildmode: #14708', function()
+    it('does not remove duplicates from wildmode: #14708', function()
       local wildmode = exec_lua [[
         vim.opt.wildmode = {"full", "list", "full"}
         return vim.o.wildmode
       ]]
 
-      eq(wildmode, 'full,list,full')
+      eq('full,list,full', wildmode)
     end)
 
     describe('option types', function()
-      it('should allow to set option with numeric value', function()
+      it('allows to set option with numeric value', function()
         eq(
           4,
           exec_lua [[
@@ -2583,7 +2639,7 @@ describe('lua stdlib', function()
         )
       end)
 
-      it('should allow to set option with boolean value', function()
+      it('allows to set option with boolean value', function()
         eq(
           true,
           exec_lua [[
@@ -2632,7 +2688,7 @@ describe('lua stdlib', function()
         )
       end)
 
-      it('should allow to set option with array or string value', function()
+      it('allows to set option with array or string value', function()
         eq(
           'indent,eol,start',
           exec_lua [[
@@ -2679,7 +2735,7 @@ describe('lua stdlib', function()
         )
       end)
 
-      it('should allow set option with map or string value', function()
+      it('allows set option with map or string value', function()
         eq(
           'eol:~,space:.',
           exec_lua [[
@@ -2729,7 +2785,7 @@ describe('lua stdlib', function()
         )
       end)
 
-      it('should allow set option with set or string value', function()
+      it('allows set option with set or string value', function()
         local ww = exec_lua [[
           vim.opt.whichwrap = {
             b = true,
@@ -2738,7 +2794,7 @@ describe('lua stdlib', function()
           return vim.go.whichwrap
         ]]
 
-        eq(ww, 'b,s')
+        eq('b,s', ww)
         eq(
           'b,s,<,>,[,]',
           exec_lua [[
@@ -3007,25 +3063,65 @@ describe('lua stdlib', function()
   end)
 
   describe('vim.on_key', function()
-    it('tracks keystrokes', function()
+    it('tracks Unicode input', function()
       insert([[hello world ]])
 
       exec_lua [[
         keys = {}
+        typed = {}
 
-        vim.on_key(function(buf)
+        vim.on_key(function(buf, typed_buf)
           if buf:byte() == 27 then
             buf = "<ESC>"
           end
+          if typed_buf:byte() == 27 then
+            typed_buf = "<ESC>"
+          end
 
           table.insert(keys, buf)
+          table.insert(typed, typed_buf)
         end)
       ]]
 
-      insert([[next 🤦 lines å ]])
+      insert([[next 🤦 lines å …]])
 
       -- It has escape in the keys pressed
-      eq('inext 🤦 lines å <ESC>', exec_lua [[return table.concat(keys, '')]])
+      eq('inext 🤦 lines å …<ESC>', exec_lua [[return table.concat(keys, '')]])
+      eq('inext 🤦 lines å …<ESC>', exec_lua [[return table.concat(typed, '')]])
+    end)
+
+    it('tracks input with modifiers', function()
+      exec_lua [[
+        keys = {}
+        typed = {}
+
+        vim.on_key(function(buf, typed_buf)
+          table.insert(keys, vim.fn.keytrans(buf))
+          table.insert(typed, vim.fn.keytrans(typed_buf))
+        end)
+      ]]
+
+      feed([[i<C-V><C-;><C-V><C-…><Esc>]])
+
+      eq('i<C-V><C-;><C-V><C-…><Esc>', exec_lua [[return table.concat(keys, '')]])
+      eq('i<C-V><C-;><C-V><C-…><Esc>', exec_lua [[return table.concat(typed, '')]])
+    end)
+
+    it('works with character find and Select mode', function()
+      insert('12345')
+
+      exec_lua [[
+        typed = {}
+
+        vim.cmd('snoremap # @')
+
+        vim.on_key(function(buf, typed_buf)
+          table.insert(typed, vim.fn.keytrans(typed_buf))
+        end)
+      ]]
+
+      feed('F3gHβγδεζ<Esc>gH…<Esc>gH#$%^')
+      eq('F3gHβγδεζ<Esc>gH…<Esc>gH#$%^', exec_lua [[return table.concat(typed, '')]])
     end)
 
     it('allows removing on_key listeners', function()
@@ -3087,23 +3183,29 @@ describe('lua stdlib', function()
       eq('inext l', exec_lua [[ return table.concat(keys, '') ]])
     end)
 
-    it('processes mapped keys, not unmapped keys', function()
+    it('argument 1 is keys after mapping, argument 2 is typed keys', function()
       exec_lua [[
         keys = {}
+        typed = {}
 
         vim.cmd("inoremap hello world")
 
-        vim.on_key(function(buf)
+        vim.on_key(function(buf, typed_buf)
           if buf:byte() == 27 then
             buf = "<ESC>"
           end
+          if typed_buf:byte() == 27 then
+            typed_buf = "<ESC>"
+          end
 
           table.insert(keys, buf)
+          table.insert(typed, typed_buf)
         end)
       ]]
       insert('hello')
 
       eq('iworld<ESC>', exec_lua [[return table.concat(keys, '')]])
+      eq('ihello<ESC>', exec_lua [[return table.concat(typed, '')]])
     end)
 
     it('can call vim.fn functions on Ctrl-C #17273', function()
@@ -3133,11 +3235,11 @@ describe('lua stdlib', function()
       ]]
     end)
 
-    it('should run from lua', function()
+    it('runs from lua', function()
       exec_lua [[vim.wait(100, function() return true end)]]
     end)
 
-    it('should wait the expected time if false', function()
+    it('waits the expected time if false', function()
       eq(
         { time = true, wait_result = { false, -1 } },
         exec_lua [[
@@ -3153,7 +3255,7 @@ describe('lua stdlib', function()
       )
     end)
 
-    it('should not block other events', function()
+    it('does not block other events', function()
       eq(
         { time = true, wait_result = true },
         exec_lua [[
@@ -3178,7 +3280,7 @@ describe('lua stdlib', function()
       )
     end)
 
-    it('should not process non-fast events when commanded', function()
+    it('does not process non-fast events when commanded', function()
       eq(
         { wait_result = false },
         exec_lua [[
@@ -3201,7 +3303,7 @@ describe('lua stdlib', function()
       )
     end)
 
-    it('should work with vim.defer_fn', function()
+    it('works with vim.defer_fn', function()
       eq(
         { time = true, wait_result = true },
         exec_lua [[
@@ -3218,7 +3320,7 @@ describe('lua stdlib', function()
       )
     end)
 
-    it('should not crash when callback errors', function()
+    it('does not crash when callback errors', function()
       local result = exec_lua [[
         return {pcall(function() vim.wait(1000, function() error("As Expected") end) end)}
       ]]
@@ -3234,7 +3336,7 @@ describe('lua stdlib', function()
       )
     end)
 
-    it('should allow waiting with no callback, explicit', function()
+    it('allows waiting with no callback, explicit', function()
       eq(
         true,
         exec_lua [[
@@ -3245,7 +3347,7 @@ describe('lua stdlib', function()
       )
     end)
 
-    it('should allow waiting with no callback, implicit', function()
+    it('allows waiting with no callback, implicit', function()
       eq(
         true,
         exec_lua [[
@@ -3256,7 +3358,7 @@ describe('lua stdlib', function()
       )
     end)
 
-    it('should call callbacks exactly once if they return true immediately', function()
+    it('calls callbacks exactly once if they return true immediately', function()
       eq(
         true,
         exec_lua [[
@@ -3270,7 +3372,7 @@ describe('lua stdlib', function()
       )
     end)
 
-    it('should call callbacks few times with large `interval`', function()
+    it('calls callbacks few times with large `interval`', function()
       eq(
         true,
         exec_lua [[
@@ -3281,7 +3383,7 @@ describe('lua stdlib', function()
       )
     end)
 
-    it('should play nice with `not` when fails', function()
+    it('plays nice with `not` when fails', function()
       eq(
         true,
         exec_lua [[
@@ -3294,7 +3396,7 @@ describe('lua stdlib', function()
       )
     end)
 
-    it('should play nice with `if` when success', function()
+    it('plays nice with `if` when success', function()
       eq(
         true,
         exec_lua [[
@@ -3307,7 +3409,7 @@ describe('lua stdlib', function()
       )
     end)
 
-    it('should return immediately with false if timeout is 0', function()
+    it('returns immediately with false if timeout is 0', function()
       eq(
         { false, -1 },
         exec_lua [[
@@ -3318,7 +3420,7 @@ describe('lua stdlib', function()
       )
     end)
 
-    it('should work with tables with __call', function()
+    it('works with tables with __call', function()
       eq(
         true,
         exec_lua [[
@@ -3328,7 +3430,7 @@ describe('lua stdlib', function()
       )
     end)
 
-    it('should work with tables with __call that change', function()
+    it('works with tables with __call that change', function()
       eq(
         true,
         exec_lua [[
@@ -3345,7 +3447,7 @@ describe('lua stdlib', function()
       )
     end)
 
-    it('should not work with negative intervals', function()
+    it('fails with negative intervals', function()
       local pcall_result = exec_lua [[
         return pcall(function() vim.wait(1000, function() return false end, -1) end)
       ]]
@@ -3353,7 +3455,7 @@ describe('lua stdlib', function()
       eq(false, pcall_result)
     end)
 
-    it('should not work with weird intervals', function()
+    it('fails with weird intervals', function()
       local pcall_result = exec_lua [[
         return pcall(function() vim.wait(1000, function() return false end, 'a string value') end)
       ]]
@@ -3396,7 +3498,7 @@ describe('lua stdlib', function()
       end)
     end)
 
-    it('should not run in fast callbacks #26122', function()
+    it('fails in fast callbacks #26122', function()
       local screen = Screen.new(80, 10)
       screen:attach()
       exec_lua([[
@@ -3416,15 +3518,11 @@ describe('lua stdlib', function()
 
   it('vim.notify_once', function()
     local screen = Screen.new(60, 5)
-    screen:set_default_attr_ids({
-      [0] = { bold = true, foreground = Screen.colors.Blue },
-      [1] = { foreground = Screen.colors.Red },
-    })
     screen:attach()
     screen:expect {
       grid = [[
       ^                                                            |
-      {0:~                                                           }|*3
+      {1:~                                                           }|*3
                                                                   |
     ]],
     }
@@ -3432,15 +3530,15 @@ describe('lua stdlib', function()
     screen:expect {
       grid = [[
       ^                                                            |
-      {0:~                                                           }|*3
-      {1:I'll only tell you this once...}                             |
+      {1:~                                                           }|*3
+      {19:I'll only tell you this once...}                             |
     ]],
     }
     feed('<C-l>')
     screen:expect {
       grid = [[
       ^                                                            |
-      {0:~                                                           }|*3
+      {1:~                                                           }|*3
                                                                   |
     ]],
     }
@@ -3617,10 +3715,6 @@ describe('lua stdlib', function()
     it('updates ruler if cursor moved', function()
       -- Fixed for win_execute in vim-patch:8.1.2124, but should've applied to nvim_win_call too!
       local screen = Screen.new(30, 5)
-      screen:set_default_attr_ids {
-        [1] = { reverse = true },
-        [2] = { bold = true, reverse = true },
-      }
       screen:attach()
       exec_lua [[
         _G.api = vim.api
@@ -3635,9 +3729,9 @@ describe('lua stdlib', function()
       ]]
       screen:expect [[
         19                            |
-        {1:[No Name] [+]  20,1         3%}|
-        ^19                            |
         {2:[No Name] [+]  20,1         3%}|
+        ^19                            |
+        {3:[No Name] [+]  20,1         3%}|
                                       |
       ]]
       exec_lua [[
@@ -3646,9 +3740,9 @@ describe('lua stdlib', function()
       ]]
       screen:expect [[
         99                            |
-        {1:[No Name] [+]  100,1       19%}|
+        {2:[No Name] [+]  100,1       19%}|
         ^19                            |
-        {2:[No Name] [+]  20,1         3%}|
+        {3:[No Name] [+]  20,1         3%}|
                                       |
       ]]
     end)
@@ -3663,6 +3757,20 @@ describe('lua stdlib', function()
         return val
       ]]
       )
+    end)
+
+    it('layout in current tabpage does not affect windows in others', function()
+      command('tab split')
+      local t2_move_win = api.nvim_get_current_win()
+      command('vsplit')
+      local t2_other_win = api.nvim_get_current_win()
+      command('tabprevious')
+      matches('E36: Not enough room$', pcall_err(command, 'execute "split|"->repeat(&lines)'))
+      command('vsplit')
+
+      -- Without vim-patch:8.2.3862, this gives E36, despite just the 1st tabpage being full.
+      exec_lua('vim.api.nvim_win_call(..., function() vim.cmd.wincmd "J" end)', t2_move_win)
+      eq({ 'col', { { 'leaf', t2_other_win }, { 'leaf', t2_move_win } } }, fn.winlayout(2))
     end)
   end)
 
@@ -3750,13 +3858,6 @@ describe('lua stdlib', function()
 
   it('vim.lua_omnifunc', function()
     local screen = Screen.new(60, 5)
-    screen:set_default_attr_ids {
-      [1] = { foreground = Screen.colors.Blue1, bold = true },
-      [2] = { background = Screen.colors.WebGray },
-      [3] = { background = Screen.colors.LightMagenta },
-      [4] = { bold = true },
-      [5] = { foreground = Screen.colors.SeaGreen, bold = true },
-    }
     screen:attach()
     command [[ set omnifunc=v:lua.vim.lua_omnifunc ]]
 
@@ -3766,10 +3867,10 @@ describe('lua stdlib', function()
     screen:expect {
       grid = [[
       vim.inspect^                                                 |
-      {1:~  }{2: inspect        }{1:                                         }|
-      {1:~  }{3: inspect_pos    }{1:                                         }|
+      {1:~  }{12: inspect        }{1:                                         }|
+      {1:~  }{4: inspect_pos    }{1:                                         }|
       {1:~                                                           }|
-      {4:-- Omni completion (^O^N^P) }{5:match 1 of 2}                    |
+      {5:-- Omni completion (^O^N^P) }{6:match 1 of 2}                    |
     ]],
     }
   end)
@@ -3942,7 +4043,36 @@ end)
 describe('vim.keymap', function()
   before_each(clear)
 
-  it('can make a mapping', function()
+  it('validates', function()
+    matches(
+      'mode: expected string|table, got number',
+      pcall_err(exec_lua, [[vim.keymap.set(42, 'x', print)]])
+    )
+
+    matches(
+      'rhs: expected string|function, got nil',
+      pcall_err(exec_lua, [[vim.keymap.set('n', 'x')]])
+    )
+
+    matches(
+      'lhs: expected string, got table',
+      pcall_err(exec_lua, [[vim.keymap.set('n', {}, print)]])
+    )
+
+    matches(
+      'opts: expected table, got function',
+      pcall_err(exec_lua, [[vim.keymap.set({}, 'x', 42, function() end)]])
+    )
+
+    matches(
+      'rhs: expected string|function, got number',
+      pcall_err(exec_lua, [[vim.keymap.set('z', 'x', 42)]])
+    )
+
+    matches('Invalid mode shortname: "z"', pcall_err(exec_lua, [[vim.keymap.set('z', 'x', 'y')]]))
+  end)
+
+  it('mapping', function()
     eq(
       0,
       exec_lua [[
@@ -3957,7 +4087,7 @@ describe('vim.keymap', function()
     eq(1, exec_lua [[return GlobalCount]])
   end)
 
-  it('can make an expr mapping', function()
+  it('expr mapping', function()
     exec_lua [[
       vim.keymap.set('n', 'aa', function() return '<Insert>π<C-V><M-π>foo<lt><Esc>' end, {expr = true})
     ]]
@@ -3967,7 +4097,7 @@ describe('vim.keymap', function()
     eq({ 'π<M-π>foo<' }, api.nvim_buf_get_lines(0, 0, -1, false))
   end)
 
-  it('can overwrite a mapping', function()
+  it('overwrite a mapping', function()
     eq(
       0,
       exec_lua [[
@@ -3990,7 +4120,7 @@ describe('vim.keymap', function()
     eq(0, exec_lua [[return GlobalCount]])
   end)
 
-  it('can unmap a mapping', function()
+  it('unmap', function()
     eq(
       0,
       exec_lua [[
@@ -4011,10 +4141,10 @@ describe('vim.keymap', function()
     feed('asdf\n')
 
     eq(1, exec_lua [[return GlobalCount]])
-    eq('\nNo mapping found', helpers.exec_capture('nmap asdf'))
+    eq('\nNo mapping found', n.exec_capture('nmap asdf'))
   end)
 
-  it('works with buffer-local mappings', function()
+  it('buffer-local mappings', function()
     eq(
       0,
       exec_lua [[
@@ -4035,7 +4165,7 @@ describe('vim.keymap', function()
     feed('asdf\n')
 
     eq(1, exec_lua [[return GlobalCount]])
-    eq('\nNo mapping found', helpers.exec_capture('nmap asdf'))
+    eq('\nNo mapping found', n.exec_capture('nmap asdf'))
   end)
 
   it('does not mutate the opts parameter', function()
@@ -4056,7 +4186,7 @@ describe('vim.keymap', function()
     )
   end)
 
-  it('can do <Plug> mappings', function()
+  it('<Plug> mappings', function()
     eq(
       0,
       exec_lua [[

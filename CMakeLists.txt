@@ -1,20 +1,22 @@
 # CMAKE REFERENCE
-#   intro: https://codingnest.com/basic-cmake/
-#   best practices (3.0+): https://gist.github.com/mbinna/c61dbb39bca0e4fb7d1f73b0d66a4fd1
-#   pitfalls: https://izzys.casa/2019/02/everything-you-never-wanted-to-know-about-cmake/
+#   - intro: https://codingnest.com/basic-cmake/
+#   - best practices (3.0+): https://gist.github.com/mbinna/c61dbb39bca0e4fb7d1f73b0d66a4fd1
+#   - pitfalls: https://izzys.casa/2019/02/everything-you-never-wanted-to-know-about-cmake/
+#   - troubleshooting:
+#     - variable_watch https://cmake.org/cmake/help/latest/command/variable_watch.html
+#     - verbose output: cmake --build build --verbose
 
 # Version should match the tested CMAKE_URL in .github/workflows/build.yml.
-cmake_minimum_required(VERSION 3.13)
-
-# Can be removed once minimum version is at least 3.15
-if(POLICY CMP0092)
-  cmake_policy(SET CMP0092 NEW)
-endif()
+cmake_minimum_required(VERSION 3.16)
 
 project(nvim C)
 
 if(POLICY CMP0135)
   cmake_policy(SET CMP0135 NEW)
+endif()
+
+if(XCODE)
+  message(FATAL_ERROR [[Xcode generator is not supported. Use "Ninja" or "Unix Makefiles" instead]])
 endif()
 
 # Point CMake at any custom modules we may ship
@@ -34,20 +36,18 @@ include(PreventInTreeBuilds)
 include(Util)
 
 #-------------------------------------------------------------------------------
+# User settings
+#-------------------------------------------------------------------------------
+
+set(DEPS_IGNORE_SHA FALSE)
+
+#-------------------------------------------------------------------------------
 # Variables
 #-------------------------------------------------------------------------------
 set(FUNCS_DATA ${PROJECT_BINARY_DIR}/funcs_data.mpack)
 set(TOUCHES_DIR ${PROJECT_BINARY_DIR}/touches)
 
 file(GLOB DOCFILES CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/runtime/doc/*.txt)
-
-set_directory_properties(PROPERTIES
-  EP_PREFIX "${DEPS_BUILD_DIR}")
-
-find_program(CCACHE_PRG ccache)
-if(CCACHE_PRG)
-  set(CMAKE_C_COMPILER_LAUNCHER ${CMAKE_COMMAND} -E env CCACHE_SLOPPINESS=pch_defines,time_macros ${CCACHE_PRG})
-endif()
 
 if(NOT CI_BUILD)
   set(CMAKE_INSTALL_MESSAGE NEVER)
@@ -126,6 +126,7 @@ else()
   option(ENABLE_LTO "enable link time optimization" ON)
 endif()
 option(ENABLE_LIBINTL "enable libintl" ON)
+option(ENABLE_WASMTIME "enable wasmtime" OFF)
 
 message(STATUS "CMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}")
 
@@ -140,14 +141,14 @@ endif()
 # If not in a git repo (e.g., a tarball) these tokens define the complete
 # version string, else they are combined with the result of `git describe`.
 set(NVIM_VERSION_MAJOR 0)
-set(NVIM_VERSION_MINOR 10)
+set(NVIM_VERSION_MINOR 11)
 set(NVIM_VERSION_PATCH 0)
 set(NVIM_VERSION_PRERELEASE "-dev") # for package maintainers
 
 # API level
 set(NVIM_API_LEVEL 12)        # Bump this after any API change.
 set(NVIM_API_LEVEL_COMPAT 0)  # Adjust this after a _breaking_ API change.
-set(NVIM_API_PRERELEASE true)
+set(NVIM_API_PRERELEASE false)
 
 # Build-type: RelWithDebInfo
 # /Og means something different in MSVC
@@ -163,6 +164,7 @@ endif()
 
 option(ENABLE_ASAN_UBSAN "Enable Clang address & undefined behavior sanitizer for nvim binary." OFF)
 option(ENABLE_MSAN "Enable Clang memory sanitizer for nvim binary." OFF)
+# TSAN exists to test Luv threads.
 option(ENABLE_TSAN "Enable Clang thread sanitizer for nvim binary." OFF)
 
 if((ENABLE_ASAN_UBSAN AND ENABLE_MSAN)
@@ -239,7 +241,7 @@ add_glob_target(
   GLOB_DIRS runtime scripts src test
   GLOB_PAT *.lua
   TOUCH_STRATEGY PER_DIR)
-add_dependencies(lintlua-luacheck lua-dev-deps)
+add_dependencies(lintlua-luacheck lua_dev_deps)
 
 add_glob_target(
   TARGET lintlua-stylua
@@ -265,7 +267,7 @@ add_custom_target(lintcommit
 add_dependencies(lintcommit nvim_bin)
 
 add_custom_target(lint)
-add_dependencies(lint lintc lintlua lintsh lintcommit lintdoc)
+add_dependencies(lint lintc lintlua lintsh lintcommit)
 
 # Format
 add_glob_target(
@@ -298,21 +300,19 @@ if(${CMAKE_SOURCE_DIR} STREQUAL ${CMAKE_CURRENT_SOURCE_DIR})
   add_subdirectory(cmake.packaging)
 endif()
 
+get_externalproject_options(uncrustify ${DEPS_IGNORE_SHA})
 ExternalProject_Add(uncrustify
-  URL https://github.com/uncrustify/uncrustify/archive/uncrustify-0.78.1.tar.gz
-  URL_HASH SHA256=ecaf4c0adca14c36dfffa30bc28e69865115ecd602c90eb16a8cddccb41caad2
   DOWNLOAD_DIR ${DEPS_DOWNLOAD_DIR}/uncrustify
   CMAKE_ARGS ${DEPS_CMAKE_ARGS}
-  CMAKE_CACHE_ARGS ${DEPS_CMAKE_CACHE_ARGS}
+    -D CMAKE_RUNTIME_OUTPUT_DIRECTORY=${DEPS_BIN_DIR}
   EXCLUDE_FROM_ALL TRUE
   ${EXTERNALPROJECT_OPTIONS})
 
 option(USE_BUNDLED_BUSTED "Use bundled busted" ON)
 if(USE_BUNDLED_BUSTED)
-  ExternalProject_Add(lua-dev-deps
-    URL https://github.com/neovim/deps/raw/5a1f71cceb24990a0b15fd9a472a5f549f019248/opt/lua-dev-deps.tar.gz
-    URL_HASH SHA256=27db2495f5eddc7fc191701ec9b291486853530c6125609d3197d03481e8d5a2
-    DOWNLOAD_DIR ${DEPS_DOWNLOAD_DIR}/lua-dev-deps
+  get_externalproject_options(lua_dev_deps ${DEPS_IGNORE_SHA})
+  ExternalProject_Add(lua_dev_deps
+    DOWNLOAD_DIR ${DEPS_DOWNLOAD_DIR}/lua_dev_deps
     SOURCE_DIR ${DEPS_SHARE_DIR}
     CONFIGURE_COMMAND ""
     BUILD_COMMAND ""
@@ -320,5 +320,5 @@ if(USE_BUNDLED_BUSTED)
     EXCLUDE_FROM_ALL TRUE
     ${EXTERNALPROJECT_OPTIONS})
 else()
-  add_custom_target(lua-dev-deps)
+  add_custom_target(lua_dev_deps)
 endif()

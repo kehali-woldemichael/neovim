@@ -34,6 +34,7 @@
 #include "nvim/digraph.h"
 #include "nvim/drawscreen.h"
 #include "nvim/edit.h"
+#include "nvim/errors.h"
 #include "nvim/eval.h"
 #include "nvim/eval/typval.h"
 #include "nvim/eval/typval_defs.h"
@@ -203,7 +204,7 @@ void do_ascii(exarg_T *eap)
       IObuff[iobuff_len++] = ' ';
     }
     IObuff[iobuff_len++] = '<';
-    if (utf_iscomposing(c)) {
+    if (utf_iscomposing_first(c)) {
       IObuff[iobuff_len++] = ' ';  // Draw composing char on top of a space.
     }
     iobuff_len += (size_t)utf_char2bytes(c, IObuff + iobuff_len);
@@ -310,9 +311,7 @@ void ex_align(exarg_T *eap)
         }
       }
     }
-    if (new_indent < 0) {
-      new_indent = 0;
-    }
+    new_indent = MAX(new_indent, 0);
     set_indent(new_indent, 0);                    // set indent
   }
   changed_lines(curbuf, eap->line1, 0, eap->line2 + 1, 0, true);
@@ -541,10 +540,8 @@ void ex_sort(exarg_T *eap)
   // Also get the longest line length for allocating "sortbuf".
   for (linenr_T lnum = eap->line1; lnum <= eap->line2; lnum++) {
     char *s = ml_get(lnum);
-    int len = (int)strlen(s);
-    if (maxlen < len) {
-      maxlen = len;
-    }
+    int len = ml_get_len(lnum);
+    maxlen = MAX(maxlen, len);
 
     colnr_T start_col = 0;
     colnr_T end_col = len;
@@ -643,8 +640,8 @@ void ex_sort(exarg_T *eap)
     }
 
     char *s = ml_get(get_lnum);
-    size_t bytelen = strlen(s) + 1;  // include EOL in bytelen
-    old_count += (bcount_t)bytelen;
+    colnr_T bytelen = ml_get_len(get_lnum) + 1;  // include EOL in bytelen
+    old_count += bytelen;
     if (!unique || i == 0 || string_compare(s, sortbuf1) != 0) {
       // Copy the line into a buffer, it may become invalid in
       // ml_append(). And it's needed for "unique".
@@ -652,7 +649,7 @@ void ex_sort(exarg_T *eap)
       if (ml_append(lnum++, sortbuf1, 0, false) == FAIL) {
         break;
       }
-      new_count += (bcount_t)bytelen;
+      new_count += bytelen;
     }
     fast_breakcheck();
     if (got_int) {
@@ -704,11 +701,6 @@ sortend:
 /// @return  FAIL for failure, OK otherwise
 int do_move(linenr_T line1, linenr_T line2, linenr_T dest)
 {
-  linenr_T l;
-  linenr_T extra;      // Num lines added before line1
-  linenr_T num_lines;  // Num lines moved
-  linenr_T last_line;  // Last line in file after adding new text
-
   if (dest >= line1 && dest < line2) {
     emsg(_("E134: Cannot move a range of lines into itself"));
     return FAIL;
@@ -719,11 +711,9 @@ int do_move(linenr_T line1, linenr_T line2, linenr_T dest)
   if (dest == line1 - 1 || dest == line2) {
     // Move the cursor as if lines were moved (see below) to be backwards
     // compatible.
-    if (dest >= line1) {
-      curwin->w_cursor.lnum = dest;
-    } else {
-      curwin->w_cursor.lnum = dest + (line2 - line1) + 1;
-    }
+    curwin->w_cursor.lnum = dest >= line1
+                            ? dest
+                            : dest + (line2 - line1) + 1;
     return OK;
   }
 
@@ -732,15 +722,18 @@ int do_move(linenr_T line1, linenr_T line2, linenr_T dest)
   bcount_t extent_byte = end_byte - start_byte;
   bcount_t dest_byte = ml_find_line_or_offset(curbuf, dest + 1, NULL, true);
 
-  num_lines = line2 - line1 + 1;
+  linenr_T num_lines = line2 - line1 + 1;  // Num lines moved
 
   // First we copy the old text to its new location -- webb
   // Also copy the flag that ":global" command uses.
   if (u_save(dest, dest + 1) == FAIL) {
     return FAIL;
   }
+
+  linenr_T l;
+  linenr_T extra;      // Num lines added before line1
   for (extra = 0, l = line1; l <= line2; l++) {
-    char *str = xstrdup(ml_get(l + extra));
+    char *str = xstrnsave(ml_get(l + extra), (size_t)ml_get_len(l + extra));
     ml_append(dest + l - line1, str, 0, false);
     xfree(str);
     if (dest < line1) {
@@ -761,7 +754,7 @@ int do_move(linenr_T line1, linenr_T line2, linenr_T dest)
   //
   // And Finally we adjust the marks we put at the end of the file back to
   // their final destination at the new text position -- webb
-  last_line = curbuf->b_ml.ml_line_count;
+  linenr_T last_line = curbuf->b_ml.ml_line_count;  // Last line in file after adding new text
   mark_adjust_nofold(line1, line2, last_line - line2, 0, kExtmarkNOOP);
 
   disable_fold_update++;
@@ -837,9 +830,7 @@ int do_move(linenr_T line1, linenr_T line2, linenr_T dest)
   if (line1 < dest) {
     dest += num_lines + 1;
     last_line = curbuf->b_ml.ml_line_count;
-    if (dest > last_line + 1) {
-      dest = last_line + 1;
-    }
+    dest = MIN(dest, last_line + 1);
     changed_lines(curbuf, line1, 0, dest, 0, false);
   } else {
     changed_lines(curbuf, dest + 1, 0, line1 + num_lines, 0, false);
@@ -876,9 +867,8 @@ void ex_copy(linenr_T line1, linenr_T line2, linenr_T n)
 
   curwin->w_cursor.lnum = n;
   while (line1 <= line2) {
-    // need to use xstrdup() because the line will be unlocked within
-    // ml_append()
-    char *p = xstrdup(ml_get(line1));
+    // need to make a copy because the line will be unlocked within ml_append()
+    char *p = xstrnsave(ml_get(line1), (size_t)ml_get_len(line1));
     ml_append(curwin->w_cursor.lnum, p, 0, false);
     xfree(p);
 
@@ -970,13 +960,13 @@ void do_bang(int addr_count, exarg_T *eap, bool forceit, bool do_in, bool do_out
     char *t = xmalloc(len);
     *t = NUL;
     if (newcmd != NULL) {
-      STRCAT(t, newcmd);
+      strcat(t, newcmd);
     }
     if (ins_prevcmd) {
-      STRCAT(t, prevcmd);
+      strcat(t, prevcmd);
     }
     char *p = t + strlen(t);
-    STRCAT(t, trailarg);
+    strcat(t, trailarg);
     xfree(newcmd);
     newcmd = t;
 
@@ -1029,8 +1019,8 @@ void do_bang(int addr_count, exarg_T *eap, bool forceit, bool do_in, bool do_out
     }
     newcmd = xmalloc(strlen(prevcmd) + 2 * strlen(p_shq) + 1);
     STRCPY(newcmd, p_shq);
-    STRCAT(newcmd, prevcmd);
-    STRCAT(newcmd, p_shq);
+    strcat(newcmd, prevcmd);
+    strcat(newcmd, p_shq);
     free_newcmd = true;
   }
   if (addr_count == 0) {                // :!
@@ -2008,6 +1998,10 @@ static int check_readonly(int *forceit, buf_T *buf)
 ///           GETFILE_OPEN_OTHER for successfully opening another file.
 int getfile(int fnum, char *ffname_arg, char *sfname_arg, bool setpm, linenr_T lnum, bool forceit)
 {
+  if (!check_can_set_curbuf_forceit(forceit)) {
+    return GETFILE_ERROR;
+  }
+
   char *ffname = ffname_arg;
   char *sfname = sfname_arg;
   bool other;
@@ -2353,9 +2347,9 @@ int do_ecmd(int fnum, char *ffname, char *sfname, exarg_T *eap, linenr_T newlnum
         win_T *the_curwin = curwin;
         buf_T *was_curbuf = curbuf;
 
-        // Set w_closing to avoid that autocommands close the window.
+        // Set w_locked to avoid that autocommands close the window.
         // Set b_locked for the same reason.
-        the_curwin->w_closing = true;
+        the_curwin->w_locked = true;
         buf->b_locked++;
 
         if (curbuf == old_curbuf.br_buf) {
@@ -2371,7 +2365,7 @@ int do_ecmd(int fnum, char *ffname, char *sfname, exarg_T *eap, linenr_T newlnum
 
         // Autocommands may have closed the window.
         if (win_valid(the_curwin)) {
-          the_curwin->w_closing = false;
+          the_curwin->w_locked = false;
         }
         buf->b_locked--;
 
@@ -2463,7 +2457,7 @@ int do_ecmd(int fnum, char *ffname, char *sfname, exarg_T *eap, linenr_T newlnum
   // Since we are starting to edit a file, consider the filetype to be
   // unset.  Helps for when an autocommand changes files and expects syntax
   // highlighting to work in the other file.
-  did_filetype = false;
+  curbuf->b_did_filetype = false;
 
   // other_file oldbuf
   //  false     false       re-edit same file, buffer is re-used
@@ -2634,14 +2628,14 @@ int do_ecmd(int fnum, char *ffname, char *sfname, exarg_T *eap, linenr_T newlnum
     if (newcol >= 0) {          // position set by autocommands
       curwin->w_cursor.lnum = newlnum;
       curwin->w_cursor.col = newcol;
-      check_cursor();
+      check_cursor(curwin);
     } else if (newlnum > 0) {  // line number from caller or old position
       curwin->w_cursor.lnum = newlnum;
       check_cursor_lnum(curwin);
       if (solcol >= 0 && !p_sol) {
         // 'sol' is off: Use last known column.
         curwin->w_cursor.col = solcol;
-        check_cursor_col();
+        check_cursor_col(curwin);
         curwin->w_cursor.coladd = 0;
         curwin->w_set_curswant = true;
       } else {
@@ -2701,7 +2695,7 @@ int do_ecmd(int fnum, char *ffname, char *sfname, exarg_T *eap, linenr_T newlnum
       *so_ptr = 999;    // force cursor to be vertically centered in the window
     }
     update_topline(curwin);
-    curwin->w_scbind_pos = curwin->w_topline;
+    curwin->w_scbind_pos = plines_m_win_fill(curwin, 1, curwin->w_topline);
     *so_ptr = n;
     redraw_curbuf_later(UPD_NOT_VALID);  // redraw this buffer later
   }
@@ -2780,10 +2774,14 @@ void ex_append(exarg_T *eap)
         indent = get_indent_lnum(lnum);
       }
     }
-    if (eap->getline == NULL) {
+    if (*eap->arg == '|') {
+      // Get the text after the trailing bar.
+      theline = xstrdup(eap->arg + 1);
+      *eap->arg = NUL;
+    } else if (eap->ea_getline == NULL) {
       // No getline() function, use the lines that follow. This ends
       // when there is no more.
-      if (eap->nextcmd == NULL || *eap->nextcmd == NUL) {
+      if (eap->nextcmd == NULL) {
         break;
       }
       p = vim_strchr(eap->nextcmd, NL);
@@ -2793,6 +2791,8 @@ void ex_append(exarg_T *eap)
       theline = xmemdupz(eap->nextcmd, (size_t)(p - eap->nextcmd));
       if (*p != NUL) {
         p++;
+      } else {
+        p = NULL;
       }
       eap->nextcmd = p;
     } else {
@@ -2800,7 +2800,8 @@ void ex_append(exarg_T *eap)
       // Set State to avoid the cursor shape to be set to MODE_INSERT
       // state when getline() returns.
       State = MODE_CMDLINE;
-      theline = eap->getline(eap->cstack->cs_looplevel > 0 ? -1 : NUL, eap->cookie, indent, true);
+      theline = eap->ea_getline(eap->cstack->cs_looplevel > 0 ? -1 : NUL,
+                                eap->cookie, indent, true);
       State = save_State;
     }
     lines_left = Rows - 1;
@@ -2922,9 +2923,7 @@ void ex_z(exarg_T *eap)
   } else {
     bigness = curwin->w_height_inner - 3;
   }
-  if (bigness < 1) {
-    bigness = 1;
-  }
+  bigness = MAX(bigness, 1);
 
   char *x = eap->arg;
   char *kind = x;
@@ -2997,19 +2996,9 @@ void ex_z(exarg_T *eap)
     break;
   }
 
-  if (start < 1) {
-    start = 1;
-  }
-
-  if (end > curbuf->b_ml.ml_line_count) {
-    end = curbuf->b_ml.ml_line_count;
-  }
-
-  if (curs > curbuf->b_ml.ml_line_count) {
-    curs = curbuf->b_ml.ml_line_count;
-  } else if (curs < 1) {
-    curs = 1;
-  }
+  start = MAX(start, 1);
+  end = MIN(end, curbuf->b_ml.ml_line_count);
+  curs = MIN(MAX(curs, 1), curbuf->b_ml.ml_line_count);
 
   for (linenr_T i = start; i <= end; i++) {
     if (minus && i == lnum) {
@@ -3079,8 +3068,8 @@ void sub_get_replacement(SubReplacementString *const ret_sub)
 void sub_set_replacement(SubReplacementString sub)
 {
   xfree(old_sub.sub);
-  if (sub.additional_elements != old_sub.additional_elements) {
-    tv_list_unref(old_sub.additional_elements);
+  if (sub.additional_data != old_sub.additional_data) {
+    xfree(old_sub.additional_data);
   }
   old_sub = sub;
 }
@@ -3095,8 +3084,9 @@ void sub_set_replacement(SubReplacementString sub)
 /// @param[in]  save Save pattern to options, history
 ///
 /// @returns true if :substitute can be replaced with a join command
-static bool sub_joining_lines(exarg_T *eap, char *pat, const char *sub, const char *cmd, bool save)
-  FUNC_ATTR_NONNULL_ARG(1, 3, 4)
+static bool sub_joining_lines(exarg_T *eap, char *pat, size_t patlen, const char *sub,
+                              const char *cmd, bool save, bool keeppatterns)
+  FUNC_ATTR_NONNULL_ARG(1, 4, 5)
 {
   // TODO(vim): find a generic solution to make line-joining operations more
   // efficient, avoid allocating a string that grows in size.
@@ -3133,11 +3123,11 @@ static bool sub_joining_lines(exarg_T *eap, char *pat, const char *sub, const ch
     }
 
     if (save) {
-      if ((cmdmod.cmod_flags & CMOD_KEEPPATTERNS) == 0) {
-        save_re_pat(RE_SUBST, pat, magic_isset());
+      if (!keeppatterns) {
+        save_re_pat(RE_SUBST, pat, patlen, magic_isset());
       }
       // put pattern in history
-      add_to_history(HIST_SEARCH, pat, true, NUL);
+      add_to_history(HIST_SEARCH, pat, patlen, true, NUL);
     }
 
     return true;
@@ -3296,7 +3286,8 @@ static int do_sub(exarg_T *eap, const proftime_T timeout, const int cmdpreview_n
     if (nmatch > 1) { \
       sub_firstlnum += (linenr_T)nmatch - 1; \
       xfree(sub_firstline); \
-      sub_firstline = xstrdup(ml_get(sub_firstlnum)); \
+      sub_firstline = xstrnsave(ml_get(sub_firstlnum), \
+                                (size_t)ml_get_len(sub_firstlnum)); \
       /* When going beyond the last line, stop substituting. */ \
       if (sub_firstlnum <= line2) { \
         do_again = true; \
@@ -3327,6 +3318,7 @@ static int do_sub(exarg_T *eap, const proftime_T timeout, const int cmdpreview_n
   };
   char *pat = NULL;
   char *sub = NULL;  // init for GCC
+  size_t patlen = 0;
   int delimiter;
   bool has_second_delim = false;
   int sublen;
@@ -3339,6 +3331,7 @@ static int do_sub(exarg_T *eap, const proftime_T timeout, const int cmdpreview_n
   linenr_T old_line_count = curbuf->b_ml.ml_line_count;
   char *sub_firstline;    // allocated copy of first sub line
   bool endcolumn = false;   // cursor in last column when done
+  const bool keeppatterns = cmdmod.cmod_flags & CMOD_KEEPPATTERNS;
   PreviewLines preview_lines = { KV_INITIAL_VALUE, 0 };
   static int pre_hl_id = 0;
   pos_T old_cursor = curwin->w_cursor;
@@ -3378,6 +3371,7 @@ static int do_sub(exarg_T *eap, const proftime_T timeout, const int cmdpreview_n
         which_pat = RE_SEARCH;              // use last '/' pattern
       }
       pat = "";                   // empty search pattern
+      patlen = 0;
       delimiter = (uint8_t)(*cmd++);                   // remember delimiter character
       has_second_delim = true;
     } else {          // find the end of the regexp
@@ -3389,6 +3383,7 @@ static int do_sub(exarg_T *eap, const proftime_T timeout, const int cmdpreview_n
         *cmd++ = NUL;                       // replace it with a NUL
         has_second_delim = true;
       }
+      patlen = strlen(pat);
     }
 
     // Small incompatibility: vi sees '\n' as end of the command, but in
@@ -3397,11 +3392,11 @@ static int do_sub(exarg_T *eap, const proftime_T timeout, const int cmdpreview_n
     cmd = skip_substitute(cmd, delimiter);
     sub = xstrdup(p);
 
-    if (!eap->skip && cmdpreview_ns <= 0) {
+    if (!eap->skip && !keeppatterns && cmdpreview_ns <= 0) {
       sub_set_replacement((SubReplacementString) {
         .sub = xstrdup(sub),
         .timestamp = os_time(),
-        .additional_elements = NULL,
+        .additional_data = NULL,
       });
     }
   } else if (!eap->skip) {    // use previous pattern and substitution
@@ -3410,6 +3405,7 @@ static int do_sub(exarg_T *eap, const proftime_T timeout, const int cmdpreview_n
       return 0;
     }
     pat = NULL;                 // search_regcomp() will use previous pattern
+    patlen = 0;
     sub = xstrdup(old_sub.sub);
 
     // Vi compatibility quirk: repeating with ":s" keeps the cursor in the
@@ -3417,7 +3413,8 @@ static int do_sub(exarg_T *eap, const proftime_T timeout, const int cmdpreview_n
     endcolumn = (curwin->w_curswant == MAXCOL);
   }
 
-  if (sub != NULL && sub_joining_lines(eap, pat, sub, cmd, cmdpreview_ns <= 0)) {
+  if (sub != NULL && sub_joining_lines(eap, pat, patlen, sub, cmd, cmdpreview_ns <= 0,
+                                       keeppatterns)) {
     xfree(sub);
     return 0;
   }
@@ -3444,9 +3441,7 @@ static int do_sub(exarg_T *eap, const proftime_T timeout, const int cmdpreview_n
     }
     eap->line1 = eap->line2;
     eap->line2 += (linenr_T)i - 1;
-    if (eap->line2 > curbuf->b_ml.ml_line_count) {
-      eap->line2 = curbuf->b_ml.ml_line_count;
-    }
+    eap->line2 = MIN(eap->line2, curbuf->b_ml.ml_line_count);
   }
 
   // check for trailing command or garbage
@@ -3472,7 +3467,7 @@ static int do_sub(exarg_T *eap, const proftime_T timeout, const int cmdpreview_n
     return 0;
   }
 
-  if (search_regcomp(pat, NULL, RE_SUBST, which_pat,
+  if (search_regcomp(pat, patlen, NULL, RE_SUBST, which_pat,
                      (cmdpreview_ns > 0 ? 0 : SEARCH_HIS), &regmatch) == FAIL) {
     if (subflags.do_error) {
       emsg(_(e_invcmd));
@@ -3624,7 +3619,8 @@ static int do_sub(exarg_T *eap, const proftime_T timeout, const int cmdpreview_n
           break;
         }
         if (sub_firstline == NULL) {
-          sub_firstline = xstrdup(ml_get(sub_firstlnum));
+          sub_firstline = xstrnsave(ml_get(sub_firstlnum),
+                                    (size_t)ml_get_len(sub_firstlnum));
         }
 
         // Save the line number of the last change for the final
@@ -3709,10 +3705,8 @@ static int do_sub(exarg_T *eap, const proftime_T timeout, const int cmdpreview_n
               print_line_no_prefix(lnum, subflags.do_number, subflags.do_list);
 
               getvcol(curwin, &curwin->w_cursor, &sc, NULL, NULL);
-              curwin->w_cursor.col = regmatch.endpos[0].col - 1;
-              if (curwin->w_cursor.col < 0) {
-                curwin->w_cursor.col = 0;
-              }
+              curwin->w_cursor.col = MAX(regmatch.endpos[0].col - 1, 0);
+
               getvcol(curwin, &curwin->w_cursor, NULL, NULL, &ec);
               curwin->w_cursor.col = regmatch.startpos[0].col;
               if (subflags.do_number || curwin->w_p_nu) {
@@ -3761,7 +3755,7 @@ static int do_sub(exarg_T *eap, const proftime_T timeout, const int cmdpreview_n
                 // really update the line, it would change
                 // what matches.  Temporarily replace the line
                 // and change it back afterwards.
-                orig_line = xstrdup(ml_get(lnum));
+                orig_line = xstrnsave(ml_get(lnum), (size_t)ml_get_len(lnum));
                 char *new_line = concat_str(new_start, sub_firstline + copycol);
 
                 // Position the cursor relative to the end of the line, the
@@ -3783,7 +3777,7 @@ static int do_sub(exarg_T *eap, const proftime_T timeout, const int cmdpreview_n
               highlight_match = true;
 
               update_topline(curwin);
-              validate_cursor();
+              validate_cursor(curwin);
               redraw_later(curwin, UPD_SOME_VALID);
               show_cursor_info_later(true);
               update_screen();
@@ -4096,7 +4090,7 @@ skip:
             // the line as reference, because the substitute may
             // have changed the number of characters.  Same for
             // "prev_matchcol".
-            STRCAT(new_start, sub_firstline + copycol);
+            strcat(new_start, sub_firstline + copycol);
             matchcol = (colnr_T)strlen(sub_firstline) - matchcol;
             prev_matchcol = (colnr_T)strlen(sub_firstline)
                             - prev_matchcol;
@@ -4243,7 +4237,7 @@ skip:
       // when interactive leave cursor on the match
       if (!subflags.do_ask) {
         if (endcolumn) {
-          coladvance(MAXCOL);
+          coladvance(curwin, MAXCOL);
         } else {
           beginline(BL_WHITE | BL_FIX);
         }
@@ -4274,7 +4268,7 @@ skip:
 
   if (subflags.do_ask && hasAnyFolding(curwin)) {
     // Cursor position may require updating
-    changed_window_setting();
+    changed_window_setting(curwin);
   }
 
   vim_regfree(regmatch.regprog);
@@ -4289,7 +4283,7 @@ skip:
   // Show 'inccommand' preview if there are matched lines.
   if (cmdpreview_ns > 0 && !aborting()) {
     if (got_quit || profile_passed_limit(timeout)) {  // Too slow, disable.
-      set_string_option_direct(kOptInccommand, "", 0, SID_NONE);
+      set_option_direct(kOptInccommand, STATIC_CSTR_AS_OPTVAL(""), 0, SID_NONE);
     } else if (*p_icm != NUL && pat != NULL) {
       if (pre_hl_id == 0) {
         pre_hl_id = syn_check_group(S_LEN("Substitute"));
@@ -4384,6 +4378,7 @@ void ex_global(exarg_T *eap)
 
   char delim;                 // delimiter, normally '/'
   char *pat;
+  size_t patlen;
   regmmatch_T regmatch;
 
   // When nesting the command works on one line.  This allows for
@@ -4419,6 +4414,7 @@ void ex_global(exarg_T *eap)
     }
     cmd++;
     pat = "";
+    patlen = 0;
   } else if (*cmd == NUL) {
     emsg(_("E148: Regular expression missing from global"));
     return;
@@ -4428,6 +4424,7 @@ void ex_global(exarg_T *eap)
     delim = *cmd;               // get the delimiter
     cmd++;                      // skip delimiter if there is one
     pat = cmd;                  // remember start of pattern
+    patlen = strlen(pat);
     cmd = skip_regexp_ex(cmd, delim, magic_isset(), &eap->arg, NULL, NULL);
     if (cmd[0] == delim) {                  // end delimiter found
       *cmd++ = NUL;                         // replace it with a NUL
@@ -4435,7 +4432,7 @@ void ex_global(exarg_T *eap)
   }
 
   char *used_pat;
-  if (search_regcomp(pat, &used_pat, RE_BOTH, which_pat,
+  if (search_regcomp(pat, patlen, &used_pat, RE_BOTH, which_pat,
                      SEARCH_HIS, &regmatch) == FAIL) {
     emsg(_(e_invcmd));
     return;
@@ -4510,7 +4507,7 @@ void global_exe(char *cmd)
   if (global_need_beginline) {
     beginline(BL_WHITE | BL_FIX);
   } else {
-    check_cursor();  // cursor may be beyond the end of the line
+    check_cursor(curwin);  // cursor may be beyond the end of the line
   }
 
   // the cursor may not have moved in the text but a change in a previous
@@ -4569,7 +4566,7 @@ bool prepare_tagpreview(bool undo_sync)
   RESET_BINDING(curwin);                // don't take over 'scrollbind' and 'cursorbind'
   curwin->w_p_diff = false;             // no 'diff'
 
-  set_string_option_direct(kOptFoldcolumn, "0", 0, SID_NONE);  // no 'foldcolumn'
+  set_option_direct(kOptFoldcolumn, STATIC_CSTR_AS_OPTVAL("0"), 0, SID_NONE);  // no 'foldcolumn'
   return true;
 }
 
@@ -4588,7 +4585,7 @@ static int show_sub(exarg_T *eap, pos_T old_cusr, PreviewLines *preview_lines, i
   buf_T *cmdpreview_buf = NULL;
 
   // disable file info message
-  set_string_option_direct(kOptShortmess, "F", 0, SID_NONE);
+  set_option_direct(kOptShortmess, STATIC_CSTR_AS_OPTVAL("F"), 0, SID_NONE);
 
   // Place cursor on nearest matching line, to undo do_sub() cursor placement.
   for (size_t i = 0; i < lines.subresults.size; i++) {
@@ -4622,8 +4619,8 @@ static int show_sub(exarg_T *eap, pos_T old_cusr, PreviewLines *preview_lines, i
   }
 
   char *str = NULL;  // construct the line to show in here
-  size_t old_line_size = 0;
-  size_t line_size = 0;
+  colnr_T old_line_size = 0;
+  colnr_T line_size = 0;
   linenr_T linenr_preview = 0;  // last line added to preview buffer
   linenr_T linenr_origbuf = 0;  // last line added to original buffer
   linenr_T next_linenr = 0;     // next line to show for the match
@@ -4662,21 +4659,21 @@ static int show_sub(exarg_T *eap, pos_T old_cusr, PreviewLines *preview_lines, i
           line = "";
         } else {
           line = ml_get_buf(orig_buf, next_linenr);
-          line_size = strlen(line) + (size_t)col_width + 1;
+          line_size = ml_get_buf_len(orig_buf, next_linenr) + col_width + 1;
 
           // Reallocate if line not long enough
           if (line_size > old_line_size) {
-            str = xrealloc(str, line_size * sizeof(char));
+            str = xrealloc(str, (size_t)line_size * sizeof(char));
             old_line_size = line_size;
           }
         }
         // Put "|lnum| line" into `str` and append it to the preview buffer.
-        snprintf(str, line_size, "|%*" PRIdLINENR "| %s", col_width - 3,
+        snprintf(str, (size_t)line_size, "|%*" PRIdLINENR "| %s", col_width - 3,
                  next_linenr, line);
         if (linenr_preview == 0) {
-          ml_replace_buf(cmdpreview_buf, 1, str, true);
+          ml_replace_buf(cmdpreview_buf, 1, str, true, false);
         } else {
-          ml_append_buf(cmdpreview_buf, linenr_preview, str, (colnr_T)line_size, false);
+          ml_append_buf(cmdpreview_buf, linenr_preview, str, line_size, false);
         }
         linenr_preview += 1;
       }
@@ -4689,7 +4686,7 @@ static int show_sub(exarg_T *eap, pos_T old_cusr, PreviewLines *preview_lines, i
 
   xfree(str);
 
-  set_string_option_direct(kOptShortmess, save_shm_p, 0, SID_NONE);
+  set_option_direct(kOptShortmess, CSTR_AS_OPTVAL(save_shm_p), 0, SID_NONE);
   xfree(save_shm_p);
 
   return preview ? 2 : 1;

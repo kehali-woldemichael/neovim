@@ -54,6 +54,10 @@ static int validate_option_value_args(Dict(option) *opts, char *name, OptIndex *
   }
 
   if (HAS_KEY_X(opts, buf)) {
+    VALIDATE(!(HAS_KEY_X(opts, scope) && *scope == OPT_GLOBAL), "%s",
+             "cannot use both global 'scope' and 'buf'", {
+      return FAIL;
+    });
     *scope = OPT_LOCAL;
     *req_scope = kOptReqBuf;
     *from = find_buffer_by_handle(opts->buf, err);
@@ -65,11 +69,6 @@ static int validate_option_value_args(Dict(option) *opts, char *name, OptIndex *
   VALIDATE((!HAS_KEY_X(opts, filetype)
             || !(HAS_KEY_X(opts, buf) || HAS_KEY_X(opts, scope) || HAS_KEY_X(opts, win))),
            "%s", "cannot use 'filetype' with 'scope', 'buf' or 'win'", {
-    return FAIL;
-  });
-
-  VALIDATE((!HAS_KEY_X(opts, scope) || !HAS_KEY_X(opts, buf)), "%s",
-           "cannot use both 'scope' and 'buf'", {
     return FAIL;
   });
 
@@ -150,7 +149,7 @@ static buf_T *do_ft_buf(char *filetype, aco_save_T *aco, Error *err)
 /// @param[out] err  Error details, if any
 /// @return          Option value
 Object nvim_get_option_value(String name, Dict(option) *opts, Error *err)
-  FUNC_API_SINCE(9)
+  FUNC_API_SINCE(9) FUNC_API_RET_ALLOC
 {
   OptIndex opt_idx = 0;
   int scope = 0;
@@ -257,13 +256,13 @@ void nvim_set_option_value(uint64_t channel_id, String name, Object value, Dict(
 
 /// Gets the option information for all options.
 ///
-/// The dictionary has the full option names as keys and option metadata
-/// dictionaries as detailed at |nvim_get_option_info2()|.
+/// The dict has the full option names as keys and option metadata dicts as detailed at
+/// |nvim_get_option_info2()|.
 ///
 /// @see |nvim_get_commands()|
 ///
-/// @return dictionary of all options
-Dictionary nvim_get_all_options_info(Arena *arena, Error *err)
+/// @return dict of all options
+Dict nvim_get_all_options_info(Arena *arena, Error *err)
   FUNC_API_SINCE(7)
 {
   return get_all_vimoptions(arena);
@@ -271,22 +270,22 @@ Dictionary nvim_get_all_options_info(Arena *arena, Error *err)
 
 /// Gets the option information for one option from arbitrary buffer or window
 ///
-/// Resulting dictionary has keys:
-///     - name: Name of the option (like 'filetype')
-///     - shortname: Shortened name of the option (like 'ft')
-///     - type: type of option ("string", "number" or "boolean")
-///     - default: The default value for the option
-///     - was_set: Whether the option was set.
+/// Resulting dict has keys:
+/// - name: Name of the option (like 'filetype')
+/// - shortname: Shortened name of the option (like 'ft')
+/// - type: type of option ("string", "number" or "boolean")
+/// - default: The default value for the option
+/// - was_set: Whether the option was set.
 ///
-///     - last_set_sid: Last set script id (if any)
-///     - last_set_linenr: line number where option was set
-///     - last_set_chan: Channel where option was set (0 for local)
+/// - last_set_sid: Last set script id (if any)
+/// - last_set_linenr: line number where option was set
+/// - last_set_chan: Channel where option was set (0 for local)
 ///
-///     - scope: one of "global", "win", or "buf"
-///     - global_local: whether win or buf option has a global value
+/// - scope: one of "global", "win", or "buf"
+/// - global_local: whether win or buf option has a global value
 ///
-///     - commalist: List of comma separated values
-///     - flaglist: List of single char flags
+/// - commalist: List of comma separated values
+/// - flaglist: List of single char flags
 ///
 /// When {scope} is not provided, the last set information applies to the local
 /// value in the current buffer or window if it is available, otherwise the
@@ -302,7 +301,7 @@ Dictionary nvim_get_all_options_info(Arena *arena, Error *err)
 ///                         Implies {scope} is "local".
 /// @param[out] err Error details, if any
 /// @return         Option Information
-Dictionary nvim_get_option_info2(String name, Dict(option) *opts, Arena *arena, Error *err)
+Dict nvim_get_option_info2(String name, Dict(option) *opts, Arena *arena, Error *err)
   FUNC_API_SINCE(11)
 {
   OptIndex opt_idx = 0;
@@ -311,7 +310,7 @@ Dictionary nvim_get_option_info2(String name, Dict(option) *opts, Arena *arena, 
   void *from = NULL;
   if (!validate_option_value_args(opts, name.data, &opt_idx, &scope, &req_scope, &from, NULL,
                                   err)) {
-    return (Dictionary)ARRAY_DICT_INIT;
+    return (Dict)ARRAY_DICT_INIT;
   }
 
   buf_T *buf = (req_scope == kOptReqBuf) ? (buf_T *)from : curbuf;

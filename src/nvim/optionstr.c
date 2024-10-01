@@ -14,6 +14,7 @@
 #include "nvim/diff.h"
 #include "nvim/digraph.h"
 #include "nvim/drawscreen.h"
+#include "nvim/errors.h"
 #include "nvim/eval/typval_defs.h"
 #include "nvim/eval/userfunc.h"
 #include "nvim/eval/vars.h"
@@ -81,7 +82,7 @@ static char *(p_dip_values[]) = { "filler", "context:", "iblank", "icase",
                                   "closeoff", "hiddenoff", "foldcolumn:", "followwrap", "internal",
                                   "indent-heuristic", "linematch:", "algorithm:", NULL };
 static char *(p_dip_algorithm_values[]) = { "myers", "minimal", "patience", "histogram", NULL };
-static char *(p_nf_values[]) = { "bin", "octal", "hex", "alpha", "unsigned", NULL };
+static char *(p_nf_values[]) = { "bin", "octal", "hex", "alpha", "unsigned", "blank", NULL };
 static char *(p_ff_values[]) = { FF_UNIX, FF_DOS, FF_MAC, NULL };
 static char *(p_cb_values[]) = { "unnamed", "unnamedplus", NULL };
 static char *(p_cmp_values[]) = { "internal", "keepascii", NULL };
@@ -97,11 +98,13 @@ static char *(p_ssop_values[]) = { "buffers", "winpos", "resize", "winsize", "lo
                                    "options", "help", "blank", "globals", "slash", "unix", "sesdir",
                                    "curdir", "folds", "cursor", "tabpages", "terminal", "skiprtp",
                                    NULL };
-// Keep in sync with SWB_ flags in option_defs.h
+// Keep in sync with SWB_ flags in option_vars.h
 static char *(p_swb_values[]) = { "useopen", "usetab", "split", "newtab", "vsplit", "uselast",
                                   NULL };
 static char *(p_spk_values[]) = { "cursor", "screen", "topline", NULL };
 static char *(p_tc_values[]) = { "followic", "ignore", "match", "followscs", "smart", NULL };
+// Keep in sync with TCL_ flags in option_vars.h
+static char *(p_tcl_values[]) = { "left", "uselast", NULL };
 static char *(p_ve_values[]) = { "block", "insert", "all", "onemore", "none", "NONE", NULL };
 // Note: Keep this in sync with check_opt_wim()
 static char *(p_wim_values[]) = { "full", "longest", "list", "lastused", NULL };
@@ -121,8 +124,8 @@ static char *(p_bs_values[]) = { "indent", "eol", "start", "nostop", NULL };
 static char *(p_fdm_values[]) = { "manual", "expr", "marker", "indent",
                                   "syntax",  "diff", NULL };
 static char *(p_fcl_values[]) = { "all", NULL };
-static char *(p_cot_values[]) = { "menu", "menuone", "longest", "preview", "noinsert", "noselect",
-                                  "popup", NULL };
+static char *(p_cot_values[]) = { "menu", "menuone", "longest", "preview", "popup",
+                                  "noinsert", "noselect", "fuzzy", NULL };
 #ifdef BACKSLASH_IN_FILENAME
 static char *(p_csl_values[]) = { "slash", "backslash", NULL };
 #endif
@@ -136,7 +139,7 @@ static char *(p_fdc_values[]) = { "auto", "auto:1", "auto:2", "auto:3", "auto:4"
                                   "5", "6", "7", "8", "9", NULL };
 static char *(p_spo_values[]) = { "camel", "noplainbuffer", NULL };
 static char *(p_icm_values[]) = { "nosplit", "split", NULL };
-static char *(p_jop_values[]) = { "stack", "view", NULL };
+static char *(p_jop_values[]) = { "stack", "view", "clean", NULL };
 static char *(p_tpf_values[]) = { "BS", "HT", "FF", "ESC", "DEL", "C0", "C1", NULL };
 static char *(p_rdb_values[]) = { "compositor", "nothrottle", "invalid", "nodelta", "line",
                                   "flush", NULL };
@@ -157,6 +160,7 @@ void didset_string_options(void)
   opt_strings_flags(p_cmp, p_cmp_values, &cmp_flags, true);
   opt_strings_flags(p_bkc, p_bkc_values, &bkc_flags, true);
   opt_strings_flags(p_bo, p_bo_values, &bo_flags, true);
+  opt_strings_flags(p_cot, p_cot_values, &cot_flags, true);
   opt_strings_flags(p_ssop, p_ssop_values, &ssop_flags, true);
   opt_strings_flags(p_vop, p_ssop_values, &vop_flags, true);
   opt_strings_flags(p_fdo, p_fdo_values, &fdo_flags, true);
@@ -167,6 +171,7 @@ void didset_string_options(void)
   opt_strings_flags(p_tpf, p_tpf_values, &tpf_flags, true);
   opt_strings_flags(p_ve, p_ve_values, &ve_flags, true);
   opt_strings_flags(p_swb, p_swb_values, &swb_flags, true);
+  opt_strings_flags(p_tcl, p_tcl_values, &tcl_flags, true);
   opt_strings_flags(p_wop, p_wop_values, &wop_flags, true);
   opt_strings_flags(p_cb, p_cb_values, &cb_flags, true);
 }
@@ -218,6 +223,7 @@ void check_buf_options(buf_T *buf)
   check_string_option(&buf->b_p_ft);
   check_string_option(&buf->b_p_cinw);
   check_string_option(&buf->b_p_cinsd);
+  check_string_option(&buf->b_p_cot);
   check_string_option(&buf->b_p_cpt);
   check_string_option(&buf->b_p_cfu);
   check_string_option(&buf->b_p_ofu);
@@ -266,113 +272,6 @@ void check_string_option(char **pp)
   }
 }
 
-/// Set global value for string option when it's a local option.
-///
-/// @param opt  option
-/// @param varp  pointer to option variable
-static void set_string_option_global(vimoption_T *opt, char **varp)
-{
-  char **p;
-
-  // the global value is always allocated
-  if (opt->var == VAR_WIN) {
-    p = (char **)GLOBAL_WO(varp);
-  } else {
-    p = (char **)opt->var;
-  }
-  if (opt->indir != PV_NONE && p != varp) {
-    char *s = xstrdup(*varp);
-    free_string_option(*p);
-    *p = s;
-  }
-}
-
-/// Set a string option to a new value (without checking the effect).
-/// The string is copied into allocated memory.
-/// if ("opt_idx" == kOptInvalid) "name" is used, otherwise "opt_idx" is used.
-/// When "set_sid" is zero set the scriptID to current_sctx.sc_sid.  When
-/// "set_sid" is SID_NONE don't set the scriptID.  Otherwise set the scriptID to
-/// "set_sid".
-///
-/// @param  opt_flags  Option flags.
-///
-/// TODO(famiu): Remove this and its win/buf variants.
-void set_string_option_direct(OptIndex opt_idx, const char *val, int opt_flags, scid_T set_sid)
-{
-  vimoption_T *opt = get_option(opt_idx);
-
-  if (opt->var == NULL) {  // can't set hidden option
-    return;
-  }
-
-  assert(opt->var != &p_shada);
-
-  bool both = (opt_flags & (OPT_LOCAL | OPT_GLOBAL)) == 0;
-  char *s = xstrdup(val);
-  char **varp = (char **)get_varp_scope(opt, both ? OPT_LOCAL : opt_flags);
-
-  if (opt->flags & P_ALLOCED) {
-    free_string_option(*varp);
-  }
-  *varp = s;
-
-  // For buffer/window local option may also set the global value.
-  if (both) {
-    set_string_option_global(opt, varp);
-  }
-
-  opt->flags |= P_ALLOCED;
-
-  // When setting both values of a global option with a local value,
-  // make the local value empty, so that the global value is used.
-  if ((opt->indir & PV_BOTH) && both) {
-    free_string_option(*varp);
-    *varp = empty_string_option;
-  }
-  if (set_sid != SID_NONE) {
-    sctx_T script_ctx;
-
-    if (set_sid == 0) {
-      script_ctx = current_sctx;
-    } else {
-      script_ctx.sc_sid = set_sid;
-      script_ctx.sc_seq = 0;
-      script_ctx.sc_lnum = 0;
-    }
-    set_option_sctx(opt_idx, opt_flags, script_ctx);
-  }
-}
-
-/// Like set_string_option_direct(), but for a window-local option in "wp".
-/// Blocks autocommands to avoid the old curwin becoming invalid.
-void set_string_option_direct_in_win(win_T *wp, OptIndex opt_idx, const char *val, int opt_flags,
-                                     int set_sid)
-{
-  win_T *save_curwin = curwin;
-
-  block_autocmds();
-  curwin = wp;
-  curbuf = curwin->w_buffer;
-  set_string_option_direct(opt_idx, val, opt_flags, set_sid);
-  curwin = save_curwin;
-  curbuf = curwin->w_buffer;
-  unblock_autocmds();
-}
-
-/// Like set_string_option_direct(), but for a buffer-local option in "buf".
-/// Blocks autocommands to avoid the old curwin becoming invalid.
-void set_string_option_direct_in_buf(buf_T *buf, OptIndex opt_idx, const char *val, int opt_flags,
-                                     int set_sid)
-{
-  buf_T *save_curbuf = curbuf;
-
-  block_autocmds();
-  curbuf = buf;
-  set_string_option_direct(opt_idx, val, opt_flags, set_sid);
-  curbuf = save_curbuf;
-  unblock_autocmds();
-}
-
 /// Return true if "val" is a valid 'filetype' name.
 /// Also used for 'syntax' and 'keymap'.
 static bool valid_filetype(const char *val)
@@ -407,26 +306,26 @@ int check_signcolumn(win_T *wp)
       wp->w_minscwidth = 0;
       wp->w_maxscwidth = 1;
     }
-    return OK;
+  } else {
+    if (strncmp(val, "auto:", 5) != 0
+        || strlen(val) != 8
+        || !ascii_isdigit(val[5])
+        || val[6] != '-'
+        || !ascii_isdigit(val[7])) {
+      return FAIL;
+    }
+    // auto:<NUM>-<NUM>
+    int min = val[5] - '0';
+    int max = val[7] - '0';
+    if (min < 1 || max < 2 || min > 8 || min >= max) {
+      return FAIL;
+    }
+    wp->w_minscwidth = min;
+    wp->w_maxscwidth = max;
   }
 
-  if (strncmp(val, "auto:", 5) != 0
-      || strlen(val) != 8
-      || !ascii_isdigit(val[5])
-      || val[6] != '-'
-      || !ascii_isdigit(val[7])) {
-    return FAIL;
-  }
-
-  // auto:<NUM>-<NUM>
-  int min = val[5] - '0';
-  int max = val[7] - '0';
-  if (min < 1 || max < 2 || min > 8 || min >= max) {
-    return FAIL;
-  }
-
-  wp->w_minscwidth = min;
-  wp->w_maxscwidth = max;
+  int scwidth = wp->w_minscwidth <= 0 ? 0 : MIN(wp->w_maxscwidth, wp->w_scwidth);
+  wp->w_scwidth = MAX(wp->w_minscwidth, scwidth);
   return OK;
 }
 
@@ -1099,10 +998,23 @@ int expand_set_complete(optexpand_T *args, int *numMatches, char ***matches)
 /// The 'completeopt' option is changed.
 const char *did_set_completeopt(optset_T *args FUNC_ATTR_UNUSED)
 {
-  if (check_opt_strings(p_cot, p_cot_values, true) != OK) {
+  buf_T *buf = (buf_T *)args->os_buf;
+  char *cot = p_cot;
+  unsigned *flags = &cot_flags;
+
+  if (args->os_flags & OPT_LOCAL) {
+    cot = buf->b_p_cot;
+    flags = &buf->b_cot_flags;
+  }
+
+  if (check_opt_strings(cot, p_cot_values, true) != OK) {
     return e_invarg;
   }
-  completeopt_was_set();
+
+  if (opt_strings_flags(cot, p_cot_values, flags, true) != OK) {
+    return e_invarg;
+  }
+
   return NULL;
 }
 
@@ -2100,7 +2012,13 @@ const char *did_set_showbreak(optset_T *args)
 /// The 'showcmdloc' option is changed.
 const char *did_set_showcmdloc(optset_T *args FUNC_ATTR_UNUSED)
 {
-  return did_set_opt_strings(p_sloc, p_sloc_values, true);
+  const char *errmsg = did_set_opt_strings(p_sloc, p_sloc_values, false);
+
+  if (errmsg == NULL) {
+    comp_col();
+  }
+
+  return errmsg;
 }
 
 int expand_set_showcmdloc(optexpand_T *args, int *numMatches, char ***matches)
@@ -2120,8 +2038,6 @@ const char *did_set_signcolumn(optset_T *args)
   if (check_signcolumn(win) != OK) {
     return e_invarg;
   }
-  int scwidth = win->w_minscwidth <= 0 ? 0 : MIN(win->w_maxscwidth, win->w_scwidth);
-  win->w_scwidth = MAX(win->w_minscwidth, scwidth);
   // When changing the 'signcolumn' to or from 'number', recompute the
   // width of the number column if 'number' or 'relativenumber' is set.
   if ((*oldval == 'n' && *(oldval + 1) == 'u') || win->w_minscwidth == SCL_NUM) {
@@ -2288,6 +2204,21 @@ int expand_set_switchbuf(optexpand_T *args, int *numMatches, char ***matches)
   return expand_set_opt_string(args,
                                p_swb_values,
                                ARRAY_SIZE(p_swb_values) - 1,
+                               numMatches,
+                               matches);
+}
+
+/// The 'tabclose' option is changed.
+const char *did_set_tabclose(optset_T *args FUNC_ATTR_UNUSED)
+{
+  return did_set_opt_flags(p_tcl, p_tcl_values, &tcl_flags, true);
+}
+
+int expand_set_tabclose(optexpand_T *args, int *numMatches, char ***matches)
+{
+  return expand_set_opt_string(args,
+                               p_tcl_values,
+                               ARRAY_SIZE(p_tcl_values) - 1,
                                numMatches,
                                matches);
 }
@@ -2473,9 +2404,8 @@ const char *did_set_virtualedit(optset_T *args)
     } else if (strcmp(ve, args->os_oldval.string.data) != 0) {
       // Recompute cursor position in case the new 've' setting
       // changes something.
-      validate_virtcol_win(win);
-      // XXX: this only works when win == curwin
-      coladvance(win->w_virtcol);
+      validate_virtcol(win);
+      coladvance(win, win->w_virtcol);
     }
   }
   return NULL;

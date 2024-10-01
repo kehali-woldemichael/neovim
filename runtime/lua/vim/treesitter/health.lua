@@ -24,10 +24,13 @@ function M.check()
     else
       local lang = ts.language.inspect(parsername)
       health.ok(
-        string.format('Parser: %-10s ABI: %d, path: %s', parsername, lang._abi_version, parser)
+        string.format('Parser: %-20s ABI: %d, path: %s', parsername, lang._abi_version, parser)
       )
     end
   end
+
+  local can_wasm = vim._ts_add_language_from_wasm ~= nil
+  health.info(string.format('Can load WASM parsers: %s', tostring(can_wasm)))
 end
 
 return M

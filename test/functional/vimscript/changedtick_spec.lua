@@ -1,15 +1,16 @@
-local helpers = require('test.functional.helpers')(after_each)
+local t = require('test.testutil')
+local n = require('test.functional.testnvim')()
 
-local eq = helpers.eq
-local eval = helpers.eval
-local feed = helpers.feed
-local clear = helpers.clear
-local fn = helpers.fn
-local api = helpers.api
-local command = helpers.command
-local exc_exec = helpers.exc_exec
-local pcall_err = helpers.pcall_err
-local exec_capture = helpers.exec_capture
+local eq = t.eq
+local eval = n.eval
+local feed = n.feed
+local clear = n.clear
+local fn = n.fn
+local api = n.api
+local command = n.command
+local exc_exec = n.exc_exec
+local pcall_err = t.pcall_err
+local exec_capture = n.exec_capture
 
 before_each(clear)
 
@@ -37,7 +38,7 @@ describe('b:changedtick', function()
     -- Somehow undo counts as two changes
     eq(5, changedtick())
   end)
-  it('is present in b: dictionary', function()
+  it('is present in b: dict', function()
     eq(2, changedtick())
     command('let d = b:')
     eq(2, api.nvim_get_var('d').changedtick)
@@ -167,7 +168,7 @@ describe('b:changedtick', function()
     )
     eq(2, changedtick())
   end)
-  it('does not inherit VAR_FIXED when copying dictionary over', function()
+  it('does not inherit VAR_FIXED when copying dict over', function()
     eq(2, changedtick())
     eq('', exec_capture('let d1 = copy(b:)|let d1.changedtick = 42'))
     eq('', exec_capture('let d2 = copy(b:)|unlet d2.changedtick'))

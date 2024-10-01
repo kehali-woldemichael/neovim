@@ -12,6 +12,7 @@
 #include "nvim/charset.h"
 #include "nvim/digraph.h"
 #include "nvim/drawscreen.h"
+#include "nvim/errors.h"
 #include "nvim/eval.h"
 #include "nvim/eval/typval.h"
 #include "nvim/ex_cmds_defs.h"
@@ -1864,7 +1865,7 @@ static void printdigraph(const digr_T *dp, result_T *previous)
   p = buf;
 
   // add a space to draw a composing char on
-  if (utf_iscomposing(dp->result)) {
+  if (utf_iscomposing_first(dp->result)) {
     *p++ = ' ';
   }
   p += utf_char2bytes(dp->result, p);
@@ -2078,7 +2079,7 @@ void ex_loadkeymap(exarg_T *eap)
   char buf[KMAP_LLEN + 11];
   char *save_cpo = p_cpo;
 
-  if (!getline_equal(eap->getline, eap->cookie, getsourceline)) {
+  if (!getline_equal(eap->ea_getline, eap->cookie, getsourceline)) {
     emsg(_("E105: Using :loadkeymap not in a sourced file"));
     return;
   }
@@ -2094,7 +2095,7 @@ void ex_loadkeymap(exarg_T *eap)
 
   // Get each line of the sourced file, break at the end.
   while (true) {
-    char *line = eap->getline(0, eap->cookie, 0, true);
+    char *line = eap->ea_getline(0, eap->cookie, 0, true);
 
     if (line == NULL) {
       break;
@@ -2197,7 +2198,7 @@ bool get_keymap_str(win_T *wp, char *fmt, char *buf, int len)
   curwin = wp;
   STRCPY(buf, "b:keymap_name");       // must be writable
   emsg_skip++;
-  char *s = p = eval_to_string(buf, false);
+  char *s = p = eval_to_string(buf, false, false);
   emsg_skip--;
   curbuf = old_curbuf;
   curwin = old_curwin;

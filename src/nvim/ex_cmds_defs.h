@@ -167,8 +167,8 @@ struct exarg {
   int bad_char;                 ///< BAD_KEEP, BAD_DROP or replacement byte
   int useridx;                  ///< user command index
   char *errmsg;                 ///< returned error message
-  LineGetter getline;           ///< Function used to get the next line
-  void *cookie;                 ///< argument for getline()
+  LineGetter ea_getline;        ///< function used to get the next line
+  void *cookie;                 ///< argument for ea_getline()
   cstack_T *cstack;             ///< condition stack for ":if" etc.
 };
 
@@ -233,5 +233,5 @@ typedef struct {
 typedef struct {
   char *sub;            ///< Previous replacement string.
   Timestamp timestamp;  ///< Time when it was last set.
-  list_T *additional_elements;  ///< Additional data left from ShaDa file.
+  AdditionalData *additional_data;  ///< Additional data left from ShaDa file.
 } SubReplacementString;

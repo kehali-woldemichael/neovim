@@ -1197,7 +1197,7 @@ static int cin_is_cpp_baseclass(cpp_baseclass_cache_T *cached)
       s = line;
     }
     if (s == line) {
-      // don't recognize "case (foo):" as a baseclass */
+      // don't recognize "case (foo):" as a baseclass
       if (cin_iscase(s, false)) {
         break;
       }
@@ -3419,9 +3419,7 @@ term_again:
       break;
     }
 
-    //
     // Skip preprocessor directives and blank lines.
-    //
     if (cin_ispreproc_cont(&l, &curwin->w_cursor.lnum, &amount)) {
       continue;
     }

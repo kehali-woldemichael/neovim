@@ -79,7 +79,7 @@ function M.run()
   local lenses_by_client = lens_cache_by_buf[bufnr] or {}
   for client, lenses in pairs(lenses_by_client) do
     for _, lens in pairs(lenses) do
-      if lens.range.start.line == (line - 1) then
+      if lens.range.start.line == (line - 1) and lens.command and lens.command.command ~= '' then
         table.insert(options, { client = client, lens = lens })
       end
     end
@@ -164,7 +164,7 @@ function M.display(lenses, bufnr, client_id)
       return a.range.start.character < b.range.start.character
     end)
     for j, lens in ipairs(line_lenses) do
-      local text = lens.command and lens.command.title or 'Unresolved lens ...'
+      local text = (lens.command and lens.command.title or 'Unresolved lens ...'):gsub('%s+', ' ')
       table.insert(chunks, { text, 'LspCodeLens' })
       if j < num_line_lenses then
         table.insert(chunks, { ' | ', 'LspCodeLensSeparator' })
@@ -231,7 +231,7 @@ local function resolve_lenses(lenses, bufnr, client_id, callback)
       countdown()
     else
       assert(client)
-      client.request('codeLens/resolve', lens, function(_, result)
+      client.request(ms.codeLens_resolve, lens, function(_, result)
         if api.nvim_buf_is_loaded(bufnr) and result and result.command then
           lens.command = result.command
           -- Eager display to have some sort of incremental feedback
@@ -258,6 +258,8 @@ end
 
 --- |lsp-handler| for the method `textDocument/codeLens`
 ---
+---@param err lsp.ResponseError?
+---@param result lsp.CodeLens[]
 ---@param ctx lsp.HandlerContext
 function M.on_codelens(err, result, ctx, _)
   if err then
@@ -277,7 +279,8 @@ function M.on_codelens(err, result, ctx, _)
   end)
 end
 
---- @class vim.lsp.codelens.RefreshOptions
+--- @class vim.lsp.codelens.refresh.Opts
+--- @inlinedoc
 --- @field bufnr integer? filter by buffer. All buffers if nil, 0 for current buffer
 
 --- Refresh the lenses.
@@ -290,21 +293,30 @@ end
 --- autocmd BufEnter,CursorHold,InsertLeave <buffer> lua vim.lsp.codelens.refresh({ bufnr = 0 })
 --- ```
 ---
---- @param opts? vim.lsp.codelens.RefreshOptions Table with the following fields:
----  - `bufnr` (integer|nil): filter by buffer. All buffers if nil, 0 for current buffer
+--- @param opts? vim.lsp.codelens.refresh.Opts Optional fields
 function M.refresh(opts)
   opts = opts or {}
   local bufnr = opts.bufnr and resolve_bufnr(opts.bufnr)
   local buffers = bufnr and { bufnr }
     or vim.tbl_filter(api.nvim_buf_is_loaded, api.nvim_list_bufs())
-  local params = {
-    textDocument = util.make_text_document_params(),
-  }
 
   for _, buf in ipairs(buffers) do
     if not active_refreshes[buf] then
+      local params = {
+        textDocument = util.make_text_document_params(buf),
+      }
       active_refreshes[buf] = true
-      vim.lsp.buf_request(buf, ms.textDocument_codeLens, params, M.on_codelens)
+
+      local request_ids = vim.lsp.buf_request(
+        buf,
+        ms.textDocument_codeLens,
+        params,
+        M.on_codelens,
+        function() end
+      )
+      if vim.tbl_isempty(request_ids) then
+        active_refreshes[buf] = nil
+      end
     end
   end
 end

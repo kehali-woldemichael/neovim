@@ -1,5 +1,3 @@
----@brief lsp-diagnostic
-
 local protocol = require('vim.lsp.protocol')
 local ms = protocol.Methods
 
@@ -112,6 +110,14 @@ local function diagnostic_lsp_to_vim(diagnostics, bufnr, client_id)
   return vim.tbl_map(function(diagnostic)
     local start = diagnostic.range.start
     local _end = diagnostic.range['end']
+    local message = diagnostic.message
+    if type(message) ~= 'string' then
+      vim.notify_once(
+        string.format('Unsupported Markup message from LSP client %d', client_id),
+        vim.lsp.log_levels.ERROR
+      )
+      message = diagnostic.message.value
+    end
     --- @type vim.Diagnostic
     return {
       lnum = start.line,
@@ -119,18 +125,12 @@ local function diagnostic_lsp_to_vim(diagnostics, bufnr, client_id)
       end_lnum = _end.line,
       end_col = line_byte_from_position(buf_lines, _end.line, _end.character, offset_encoding),
       severity = severity_lsp_to_vim(diagnostic.severity),
-      message = diagnostic.message,
+      message = message,
       source = diagnostic.source,
       code = diagnostic.code,
       _tags = tags_lsp_to_vim(diagnostic, client_id),
       user_data = {
-        lsp = {
-          -- usage of user_data.lsp.code is deprecated in favor of the top-level code field
-          code = diagnostic.code,
-          codeDescription = diagnostic.codeDescription,
-          relatedInformation = diagnostic.relatedInformation,
-          data = diagnostic.data,
-        },
+        lsp = diagnostic,
       },
     }
   end, diagnostics)
@@ -138,7 +138,7 @@ end
 
 --- @param diagnostic vim.Diagnostic
 --- @return lsp.DiagnosticTag[]?
-local function tags_vim_to_vim(diagnostic)
+local function tags_vim_to_lsp(diagnostic)
   if not diagnostic._tags then
     return
   end
@@ -153,14 +153,18 @@ local function tags_vim_to_vim(diagnostic)
   return tags
 end
 
+--- Converts the input `vim.Diagnostic`s to LSP diagnostics.
 --- @param diagnostics vim.Diagnostic[]
 --- @return lsp.Diagnostic[]
-local function diagnostic_vim_to_lsp(diagnostics)
+function M.from(diagnostics)
   ---@param diagnostic vim.Diagnostic
   ---@return lsp.Diagnostic
   return vim.tbl_map(function(diagnostic)
-    return vim.tbl_extend('keep', {
-      -- "keep" the below fields over any duplicate fields in diagnostic.user_data.lsp
+    local user_data = diagnostic.user_data or {}
+    if user_data.lsp then
+      return user_data.lsp
+    end
+    return {
       range = {
         start = {
           line = diagnostic.lnum,
@@ -175,8 +179,8 @@ local function diagnostic_vim_to_lsp(diagnostics)
       message = diagnostic.message,
       source = diagnostic.source,
       code = diagnostic.code,
-      tags = tags_vim_to_vim(diagnostics),
-    }, diagnostic.user_data and (diagnostic.user_data.lsp or {}) or {})
+      tags = tags_vim_to_lsp(diagnostic),
+    }
   end, diagnostics)
 end
 
@@ -287,6 +291,7 @@ end
 --- )
 --- ```
 ---
+---@param _ lsp.ResponseError?
 ---@param result lsp.PublishDiagnosticsParams
 ---@param ctx lsp.HandlerContext
 ---@param config? vim.diagnostic.Opts Configuration table (see |vim.diagnostic.config()|).
@@ -319,9 +324,10 @@ end
 --- )
 --- ```
 ---
+---@param _ lsp.ResponseError?
 ---@param result lsp.DocumentDiagnosticReport
 ---@param ctx lsp.HandlerContext
----@param config table Configuration table (see |vim.diagnostic.config()|).
+---@param config vim.diagnostic.Opts Configuration table (see |vim.diagnostic.config()|).
 function M.on_diagnostic(_, result, ctx, config)
   if result == nil or result.kind == 'unchanged' then
     return
@@ -366,6 +372,7 @@ end
 ---              Structured: { [1] = {...}, [5] = {.... } }
 ---@private
 function M.get_line_diagnostics(bufnr, line_nr, opts, client_id)
+  vim.deprecate('vim.lsp.diagnostic.get_line_diagnostics', 'vim.diagnostic.get', '0.12')
   convert_severity(opts)
   local diag_opts = {} --- @type vim.diagnostic.GetOpts
 
@@ -379,7 +386,7 @@ function M.get_line_diagnostics(bufnr, line_nr, opts, client_id)
 
   diag_opts.lnum = line_nr or (api.nvim_win_get_cursor(0)[1] - 1)
 
-  return diagnostic_vim_to_lsp(vim.diagnostic.get(bufnr, diag_opts))
+  return M.from(vim.diagnostic.get(bufnr, diag_opts))
 end
 
 --- Clear diagnostics from pull based clients
@@ -390,7 +397,7 @@ local function clear(bufnr)
   end
 end
 
----@class lsp.diagnostic.bufstate
+---@class (private) lsp.diagnostic.bufstate
 ---@field enabled boolean Whether inlay hints are enabled for this buffer
 ---@type table<integer, lsp.diagnostic.bufstate>
 local bufstates = {}

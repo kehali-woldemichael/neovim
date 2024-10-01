@@ -6,7 +6,6 @@
 #endif
 #include <assert.h>
 #include <limits.h>
-#include <msgpack/pack.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -14,7 +13,9 @@
 #include <string.h>
 #ifdef ENABLE_ASAN_UBSAN
 # include <sanitizer/asan_interface.h>
-# include <sanitizer/ubsan_interface.h>
+# ifndef MSWIN
+#  include <sanitizer/ubsan_interface.h>
+# endif
 #endif
 
 #include "auto/config.h"  // IWYU pragma: keep
@@ -35,13 +36,14 @@
 #include "nvim/diff.h"
 #include "nvim/drawline.h"
 #include "nvim/drawscreen.h"
+#include "nvim/errors.h"
 #include "nvim/eval.h"
 #include "nvim/eval/typval.h"
 #include "nvim/eval/typval_defs.h"
 #include "nvim/eval/userfunc.h"
 #include "nvim/event/loop.h"
 #include "nvim/event/multiqueue.h"
-#include "nvim/event/process.h"
+#include "nvim/event/proc.h"
 #include "nvim/event/stream.h"
 #include "nvim/ex_cmds.h"
 #include "nvim/ex_docmd.h"
@@ -61,6 +63,7 @@
 #include "nvim/log.h"
 #include "nvim/lua/executor.h"
 #include "nvim/lua/secure.h"
+#include "nvim/lua/treesitter.h"
 #include "nvim/macros_defs.h"
 #include "nvim/main.h"
 #include "nvim/mark.h"
@@ -70,7 +73,6 @@
 #include "nvim/mouse.h"
 #include "nvim/move.h"
 #include "nvim/msgpack_rpc/channel.h"
-#include "nvim/msgpack_rpc/helpers.h"
 #include "nvim/msgpack_rpc/server.h"
 #include "nvim/normal.h"
 #include "nvim/ops.h"
@@ -152,11 +154,8 @@ void event_init(void)
   loop_init(&main_loop, NULL);
   resize_events = multiqueue_new_child(main_loop.events);
 
-  // early msgpack-rpc initialization
-  msgpack_rpc_helpers_init();
-  input_init();
   signal_init();
-  // finish mspgack-rpc initialization
+  // mspgack-rpc initialization
   channel_init();
   terminal_init();
   ui_init();
@@ -175,7 +174,7 @@ bool event_teardown(void)
   loop_poll_events(&main_loop, 0);  // Drain thread_events, fast_events.
   input_stop();
   channel_teardown();
-  process_teardown(&main_loop);
+  proc_teardown(&main_loop);
   timer_teardown();
   server_teardown();
   signal_teardown();
@@ -267,7 +266,7 @@ int main(int argc, char **argv)
 
   if (argc > 1 && STRICMP(argv[1], "-ll") == 0) {
     if (argc == 2) {
-      print_mainerr(err_arg_missing, argv[1]);
+      print_mainerr(err_arg_missing, argv[1], NULL);
       exit(1);
     }
     nlua_run_script(argv, argc, 3);
@@ -333,12 +332,6 @@ int main(int argc, char **argv)
 #endif
   bool use_builtin_ui = (has_term && !headless_mode && !embedded_mode && !silent_mode);
 
-  // don't bind the server yet, if we are using builtin ui.
-  // This will be done when nvim server has been forked from the ui process
-  if (!use_builtin_ui) {
-    server_init(params.listen_addr);
-  }
-
   if (params.remote) {
     remote_request(&params, params.remote, params.server_addr, argc, argv,
                    use_builtin_ui);
@@ -356,6 +349,17 @@ int main(int argc, char **argv)
     ui_client_channel_id = rv;
   }
 
+  // NORETURN: Start builtin UI client.
+  if (ui_client_channel_id) {
+    ui_client_run(remote_ui);  // NORETURN
+  }
+  assert(!ui_client_channel_id && !use_builtin_ui);
+  // Nvim server...
+
+  if (!server_init(params.listen_addr)) {
+    mainerr(IObuff, NULL, NULL);
+  }
+
   TIME_MSG("expanding arguments");
 
   if (params.diff_mode && params.window_count == -1) {
@@ -366,7 +370,7 @@ int main(int argc, char **argv)
 
   setbuf(stdout, NULL);  // NOLINT(bugprone-unsafe-functions)
 
-  full_screen = !silent_mode;
+  full_screen = !silent_mode || exmode_active;
 
   // Set the default values for the options that use Rows and Columns.
   win_init_size();
@@ -398,12 +402,6 @@ int main(int argc, char **argv)
     input_start();
   }
 
-  if (ui_client_channel_id) {
-    time_finish();
-    ui_client_run(remote_ui);  // NORETURN
-  }
-  assert(!ui_client_channel_id && !use_builtin_ui);
-
   // Wait for UIs to set up Nvim or show early messages
   // and prompts (--cmd, swapfile dialog, …).
   bool use_remote_ui = (embedded_mode && !headless_mode);
@@ -426,7 +424,19 @@ int main(int argc, char **argv)
     params.edit_type = EDIT_STDIN;
   }
 
-  open_script_files(&params);
+  if (params.scriptin) {
+    if (!open_scriptin(params.scriptin)) {
+      os_exit(2);
+    }
+  }
+  if (params.scriptout) {
+    scriptout = os_fopen(params.scriptout, params.scriptout_append ? APPENDBIN : WRITEBIN);
+    if (scriptout == NULL) {
+      fprintf(stderr, _("Cannot open for script output: \""));
+      fprintf(stderr, "%s\"\n", params.scriptout);
+      os_exit(2);
+    }
+  }
 
   nlua_init_defaults();
 
@@ -533,10 +543,8 @@ int main(int argc, char **argv)
 
   no_wait_return = true;
 
-  //
   // Create the requested number of windows and edit buffers in them.
   // Also does recovery if "recoverymode" set.
-  //
   create_windows(&params);
   TIME_MSG("opening buffers");
 
@@ -630,7 +638,7 @@ int main(int argc, char **argv)
 
   // WORKAROUND(mhi): #3023
   if (cb_flags & CB_UNNAMEDMASK) {
-    eval_has_provider("clipboard");
+    eval_has_provider("clipboard", false);
   }
 
   if (params.luaf != NULL) {
@@ -959,8 +967,8 @@ static void remote_request(mparm_T *params, int remote_args, char *server_addr, 
     os_exit(2);
   }
 
-  if (o.type == kObjectTypeDictionary) {
-    rvobj.data.dictionary = o.data.dictionary;
+  if (o.type == kObjectTypeDict) {
+    rvobj.data.dict = o.data.dict;
   } else {
     fprintf(stderr, "vim._cs_remote returned unexpected value\n");
     os_exit(2);
@@ -969,32 +977,32 @@ static void remote_request(mparm_T *params, int remote_args, char *server_addr, 
   TriState should_exit = kNone;
   TriState tabbed = kNone;
 
-  for (size_t i = 0; i < rvobj.data.dictionary.size; i++) {
-    if (strequal(rvobj.data.dictionary.items[i].key.data, "errmsg")) {
-      if (rvobj.data.dictionary.items[i].value.type != kObjectTypeString) {
+  for (size_t i = 0; i < rvobj.data.dict.size; i++) {
+    if (strequal(rvobj.data.dict.items[i].key.data, "errmsg")) {
+      if (rvobj.data.dict.items[i].value.type != kObjectTypeString) {
         fprintf(stderr, "vim._cs_remote returned an unexpected type for 'errmsg'\n");
         os_exit(2);
       }
-      fprintf(stderr, "%s\n", rvobj.data.dictionary.items[i].value.data.string.data);
+      fprintf(stderr, "%s\n", rvobj.data.dict.items[i].value.data.string.data);
       os_exit(2);
-    } else if (strequal(rvobj.data.dictionary.items[i].key.data, "result")) {
-      if (rvobj.data.dictionary.items[i].value.type != kObjectTypeString) {
+    } else if (strequal(rvobj.data.dict.items[i].key.data, "result")) {
+      if (rvobj.data.dict.items[i].value.type != kObjectTypeString) {
         fprintf(stderr, "vim._cs_remote returned an unexpected type for 'result'\n");
         os_exit(2);
       }
-      printf("%s", rvobj.data.dictionary.items[i].value.data.string.data);
-    } else if (strequal(rvobj.data.dictionary.items[i].key.data, "tabbed")) {
-      if (rvobj.data.dictionary.items[i].value.type != kObjectTypeBoolean) {
+      printf("%s", rvobj.data.dict.items[i].value.data.string.data);
+    } else if (strequal(rvobj.data.dict.items[i].key.data, "tabbed")) {
+      if (rvobj.data.dict.items[i].value.type != kObjectTypeBoolean) {
         fprintf(stderr, "vim._cs_remote returned an unexpected type for 'tabbed'\n");
         os_exit(2);
       }
-      tabbed = rvobj.data.dictionary.items[i].value.data.boolean ? kTrue : kFalse;
-    } else if (strequal(rvobj.data.dictionary.items[i].key.data, "should_exit")) {
-      if (rvobj.data.dictionary.items[i].value.type != kObjectTypeBoolean) {
+      tabbed = rvobj.data.dict.items[i].value.data.boolean ? kTrue : kFalse;
+    } else if (strequal(rvobj.data.dict.items[i].key.data, "should_exit")) {
+      if (rvobj.data.dict.items[i].value.type != kObjectTypeBoolean) {
         fprintf(stderr, "vim._cs_remote returned an unexpected type for 'should_exit'\n");
         os_exit(2);
       }
-      should_exit = rvobj.data.dictionary.items[i].value.data.boolean ? kTrue : kFalse;
+      should_exit = rvobj.data.dict.items[i].value.data.boolean ? kTrue : kFalse;
     }
   }
   if (should_exit == kNone || tabbed == kNone) {
@@ -1042,7 +1050,7 @@ static void command_line_scan(mparm_T *parmp)
     // "+" or "+{number}" or "+/{pat}" or "+{command}" argument.
     if (argv[0][0] == '+' && !had_minmin) {
       if (parmp->n_commands >= MAX_ARG_CMDS) {
-        mainerr(err_extra_cmd, NULL);
+        mainerr(err_extra_cmd, NULL, NULL);
       }
       argv_idx = -1;  // skip to next argument
       if (argv[0][1] == NUL) {
@@ -1063,7 +1071,7 @@ static void command_line_scan(mparm_T *parmp)
           parmp->no_swap_file = true;
         } else {
           if (parmp->edit_type > EDIT_STDIN) {
-            mainerr(err_too_many_args, argv[0]);
+            mainerr(err_too_many_args, argv[0], NULL);
           }
           parmp->had_stdin_file = true;
           parmp->edit_type = EDIT_STDIN;
@@ -1088,27 +1096,13 @@ static void command_line_scan(mparm_T *parmp)
           // set stdout to binary to avoid crlf in --api-info output
           _setmode(STDOUT_FILENO, _O_BINARY);
 #endif
-          FileDescriptor fp;
-          const int fof_ret = file_open_fd(&fp, STDOUT_FILENO,
-                                           kFileWriteOnly);
-          msgpack_packer *p = msgpack_packer_new(&fp, msgpack_file_write);
 
-          if (fof_ret != 0) {
-            semsg(_("E5421: Failed to open stdin: %s"), os_strerror(fof_ret));
+          String data = api_metadata_raw();
+          const ptrdiff_t written_bytes = os_write(STDOUT_FILENO, data.data, data.size, false);
+          if (written_bytes < 0) {
+            semsg(_("E5420: Failed to write to file: %s"), os_strerror((int)written_bytes));
           }
 
-          if (p == NULL) {
-            emsg(_(e_outofmem));
-          }
-
-          Object md = DICTIONARY_OBJ(api_metadata());
-          msgpack_rpc_from_object(&md, p);
-
-          msgpack_packer_free(p);
-          const int ff_ret = file_flush(&fp);
-          if (ff_ret < 0) {
-            msgpack_file_write_error(ff_ret);
-          }
           os_exit(0);
         } else if (STRICMP(argv[0] + argv_idx, "headless") == 0) {
           headless_mode = true;
@@ -1140,7 +1134,7 @@ static void command_line_scan(mparm_T *parmp)
           nlua_disable_preload = true;
         } else {
           if (argv[0][argv_idx]) {
-            mainerr(err_opt_unknown, argv[0]);
+            mainerr(err_opt_unknown, argv[0], NULL);
           }
           had_minmin = true;
         }
@@ -1214,7 +1208,7 @@ static void command_line_scan(mparm_T *parmp)
         break;
       case 'q':    // "-q" QuickFix mode
         if (parmp->edit_type != EDIT_NONE) {
-          mainerr(err_too_many_args, argv[0]);
+          mainerr(err_too_many_args, argv[0], NULL);
         }
         parmp->edit_type = EDIT_QF;
         if (argv[0][argv_idx]) {  // "-q{errorfile}"
@@ -1243,7 +1237,7 @@ static void command_line_scan(mparm_T *parmp)
         break;
       case 't':    // "-t {tag}" or "-t{tag}" jump to tag
         if (parmp->edit_type != EDIT_NONE) {
-          mainerr(err_too_many_args, argv[0]);
+          mainerr(err_too_many_args, argv[0], NULL);
         }
         parmp->edit_type = EDIT_TAG;
         if (argv[0][argv_idx]) {  // "-t{tag}"
@@ -1277,7 +1271,7 @@ static void command_line_scan(mparm_T *parmp)
       case 'c':    // "-c{command}" or "-c {command}" exec command
         if (argv[0][argv_idx] != NUL) {
           if (parmp->n_commands >= MAX_ARG_CMDS) {
-            mainerr(err_extra_cmd, NULL);
+            mainerr(err_extra_cmd, NULL, NULL);
           }
           parmp->commands[parmp->n_commands++] = argv[0] + argv_idx;
           argv_idx = -1;
@@ -1294,19 +1288,19 @@ static void command_line_scan(mparm_T *parmp)
         break;
 
       default:
-        mainerr(err_opt_unknown, argv[0]);
+        mainerr(err_opt_unknown, argv[0], NULL);
       }
 
       // Handle option arguments with argument.
       if (want_argument) {
         // Check for garbage immediately after the option letter.
         if (argv[0][argv_idx] != NUL) {
-          mainerr(err_opt_garbage, argv[0]);
+          mainerr(err_opt_garbage, argv[0], NULL);
         }
 
         argc--;
         if (argc < 1 && c != 'S') {  // -S has an optional argument
-          mainerr(err_arg_missing, argv[0]);
+          mainerr(err_arg_missing, argv[0], NULL);
         }
         argv++;
         argv_idx = -1;
@@ -1315,7 +1309,7 @@ static void command_line_scan(mparm_T *parmp)
         case 'c':    // "-c {command}" execute command
         case 'S':    // "-S {file}" execute Vim script
           if (parmp->n_commands >= MAX_ARG_CMDS) {
-            mainerr(err_extra_cmd, NULL);
+            mainerr(err_extra_cmd, NULL, NULL);
           }
           if (c == 'S') {
             char *a;
@@ -1346,7 +1340,7 @@ static void command_line_scan(mparm_T *parmp)
           if (strequal(argv[-1], "--cmd")) {
             // "--cmd {command}" execute command
             if (parmp->n_pre_commands >= MAX_ARG_CMDS) {
-              mainerr(err_extra_cmd, NULL);
+              mainerr(err_extra_cmd, NULL, NULL);
             }
             parmp->pre_commands[parmp->n_pre_commands++] = argv[0];
           } else if (strequal(argv[-1], "--listen")) {
@@ -1428,13 +1422,24 @@ scripterror:
 
       // Check for only one type of editing.
       if (parmp->edit_type > EDIT_STDIN) {
-        mainerr(err_too_many_args, argv[0]);
+        mainerr(err_too_many_args, argv[0], NULL);
       }
       parmp->edit_type = EDIT_FILE;
 
       // Add the file to the global argument list.
       ga_grow(&global_alist.al_ga, 1);
       char *p = xstrdup(argv[0]);
+
+      // On Windows expand "~\" or "~/" prefix in file names to profile directory.
+#ifdef MSWIN
+      if (*p == '~' && (p[1] == '\\' || p[1] == '/')) {
+        size_t size = strlen(os_homedir()) + strlen(p);
+        char *tilde_expanded = xmalloc(size);
+        snprintf(tilde_expanded, size, "%s%s", os_homedir(), p + 1);
+        xfree(p);
+        p = tilde_expanded;
+      }
+#endif
 
       if (parmp->diff_mode && os_isdir(p) && GARGCOUNT > 0
           && !os_isdir(alist_name(&GARGLIST[0]))) {
@@ -1464,7 +1469,7 @@ scripterror:
   }
 
   if (embedded_mode && (silent_mode || parmp->luaf)) {
-    mainerr(_("--embed conflicts with -es/-Es/-l"), NULL);
+    mainerr(_("--embed conflicts with -es/-Es/-l"), NULL, NULL);
   }
 
   // If there is a "+123" or "-c" command, set v:swapcommand to the first one.
@@ -1508,7 +1513,7 @@ static void init_startuptime(mparm_T *paramp)
   }
   for (int i = 1; i < paramp->argc - 1; i++) {
     if (STRICMP(paramp->argv[i], "--startuptime") == 0) {
-      time_init(paramp->argv[i + 1], is_embed ? "Embedded" : "Primary/TUI");
+      time_init(paramp->argv[i + 1], is_embed ? "Embedded" : "Primary (or UI client)");
       time_start("--- NVIM STARTING ---");
       break;
     }
@@ -1568,7 +1573,7 @@ static void handle_quickfix(mparm_T *paramp)
 {
   if (paramp->edit_type == EDIT_QF) {
     if (paramp->use_ef != NULL) {
-      set_string_option_direct(kOptErrorfile, paramp->use_ef, 0, SID_CARG);
+      set_option_direct(kOptErrorfile, CSTR_AS_OPTVAL(paramp->use_ef), 0, SID_CARG);
     }
     vim_snprintf(IObuff, IOSIZE, "cfile %s", p_ef);
     if (qf_init(NULL, p_ef, p_efm, true, IObuff, p_menc) < 0) {
@@ -1618,37 +1623,6 @@ static void read_stdin(void)
   msg_didany = save_msg_didany;
   TIME_MSG("reading stdin");
   check_swap_exists_action();
-}
-
-static void open_script_files(mparm_T *parmp)
-{
-  if (parmp->scriptin) {
-    int error;
-    if (strequal(parmp->scriptin, "-")) {
-      FileDescriptor *stdin_dup = file_open_stdin();
-      scriptin[0] = stdin_dup;
-    } else {
-      scriptin[0] = file_open_new(&error, parmp->scriptin,
-                                  kFileReadOnly|kFileNonBlocking, 0);
-      if (scriptin[0] == NULL) {
-        vim_snprintf(IObuff, IOSIZE,
-                     _("Cannot open for reading: \"%s\": %s\n"),
-                     parmp->scriptin, os_strerror(error));
-        fprintf(stderr, "%s", IObuff);
-        os_exit(2);
-      }
-    }
-    save_typebuf();
-  }
-
-  if (parmp->scriptout) {
-    scriptout = os_fopen(parmp->scriptout, parmp->scriptout_append ? APPENDBIN : WRITEBIN);
-    if (scriptout == NULL) {
-      fprintf(stderr, _("Cannot open for script output: \""));
-      fprintf(stderr, "%s\"\n", parmp->scriptout);
-      os_exit(2);
-    }
-  }
 }
 
 // Create the requested number of windows and edit buffers in them.
@@ -2158,28 +2132,30 @@ static int execute_env(char *env)
   return OK;
 }
 
-/// Prints the following then exits:
-/// - An error message `errstr`
-/// - A string `str` if not null
+/// Prints a message of the form "{msg1}: {msg2}: {msg3}", then exits with code 1.
 ///
-/// @param errstr  string containing an error message
-/// @param str     string to append to the primary error message, or NULL
-static void mainerr(const char *errstr, const char *str)
+/// @param msg1  error message
+/// @param msg2  extra message, or NULL
+/// @param msg3  extra message, or NULL
+static void mainerr(const char *msg1, const char *msg2, const char *msg3)
   FUNC_ATTR_NORETURN
 {
-  print_mainerr(errstr, str);
+  print_mainerr(msg1, msg2, msg3);
   os_exit(1);
 }
 
-static void print_mainerr(const char *errstr, const char *str)
+static void print_mainerr(const char *msg1, const char *msg2, const char *msg3)
 {
   char *prgname = path_tail(argv0);
 
   signal_stop();              // kill us with CTRL-C here, if you like
 
-  fprintf(stderr, "%s: %s", prgname, _(errstr));
-  if (str != NULL) {
-    fprintf(stderr, ": \"%s\"", str);
+  fprintf(stderr, "%s: %s", prgname, _(msg1));
+  if (msg2 != NULL) {
+    fprintf(stderr, ": \"%s\"", msg2);
+  }
+  if (msg3 != NULL) {
+    fprintf(stderr, ": \"%s\"", msg3);
   }
   fprintf(stderr, _("\nMore info with \""));
   fprintf(stderr, "%s -h\"\n", prgname);
@@ -2230,7 +2206,7 @@ static void usage(void)
   printf(_("  --headless            Don't start a user interface\n"));
   printf(_("  --listen <address>    Serve RPC API from this address\n"));
   printf(_("  --remote[-subcommand] Execute commands remotely on a server\n"));
-  printf(_("  --server <address>    Specify RPC server to send commands to\n"));
+  printf(_("  --server <address>    Connect to this Nvim server\n"));
   printf(_("  --startuptime <file>  Write startup timing messages to <file>\n"));
   printf(_("\nSee \":help startup-options\" for all options.\n"));
 }
